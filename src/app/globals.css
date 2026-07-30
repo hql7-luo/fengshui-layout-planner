@@ -1,0 +1,80 @@
+@import "tailwindcss";
+
+@theme {
+  --color-paper: #f7f5f1;
+  --color-paper-deep: #efece5;
+  --color-surface: #ffffff;
+  --color-ink: #1e2422;
+  --color-ink-soft: #4a534e;
+  --color-muted: #7b8480;
+  --color-line: #e3ded4;
+  --color-jade: #2f5d50;
+  --color-jade-soft: #e7eeea;
+  --color-jade-deep: #234439;
+  --color-clay: #b8523f;
+  --color-clay-soft: #f6e8e4;
+  --color-ochre: #b78034;
+  --color-ochre-soft: #f7efe0;
+
+  --font-sans: var(--font-geist-sans), "PingFang SC", "Hiragino Sans GB",
+    "Microsoft YaHei", "Source Han Sans SC", system-ui, sans-serif;
+  --font-mono: var(--font-geist-mono), "SFMono-Regular", Menlo, monospace;
+}
+
+:root {
+  color-scheme: light;
+}
+
+html,
+body {
+  max-width: 100vw;
+  overflow-x: hidden;
+}
+
+body {
+  background-color: var(--color-paper);
+  color: var(--color-ink);
+  font-family: var(--font-sans);
+  -webkit-font-smoothing: antialiased;
+}
+
+/* 细网格背景，用于画布与首页装饰 */
+.grid-paper {
+  background-image:
+    linear-gradient(to right, rgba(47, 93, 80, 0.06) 1px, transparent 1px),
+    linear-gradient(to bottom, rgba(47, 93, 80, 0.06) 1px, transparent 1px);
+  background-size: 24px 24px;
+}
+
+.text-balance {
+  text-wrap: balance;
+}
+
+/* 自定义滚动条，保持克制 */
+.thin-scroll::-webkit-scrollbar {
+  width: 8px;
+  height: 8px;
+}
+.thin-scroll::-webkit-scrollbar-thumb {
+  background: #d8d2c6;
+  border-radius: 999px;
+}
+.thin-scroll::-webkit-scrollbar-track {
+  background: transparent;
+}
+
+@media print {
+  .no-print {
+    display: none !important;
+  }
+  body {
+    background: #ffffff;
+  }
+  .print-block {
+    break-inside: avoid;
+    page-break-inside: avoid;
+  }
+  main {
+    padding: 0 !important;
+  }
+}
