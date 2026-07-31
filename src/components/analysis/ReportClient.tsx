@@ -9,7 +9,7 @@ import { useAnalysis } from '@/hooks/use-analysis';
 import { useHydrated } from '@/hooks/use-hydrated';
 import { DISCLAIMER_TEXT, PRODUCT_NAME_ZH } from '@/lib/constants';
 import { CATEGORY_DESCRIPTIONS, CATEGORY_LABELS, gradeOf, SCORE_CATEGORIES } from '@/lib/scoring';
-import type { ScenarioKey } from '@/lib/types';
+import type { ApplyAllSummary, ApplyStatus, Issue, ScenarioKey } from '@/lib/types';
 import { selectCurrentProject, useProjectStore } from '@/store/project-store';
 
 const SCENARIO_LABELS: Record<ScenarioKey, string> = {
@@ -21,8 +21,37 @@ export function ReportClient() {
   const hydrated = useHydrated();
   const project = useProjectStore(selectCurrentProject);
   const storeScenario = useProjectStore((s) => s.scenario);
+  const applyFix = useProjectStore((s) => s.applyFix);
+  const applyAllFixes = useProjectStore((s) => s.applyAllFixes);
+  const copyScenario = useProjectStore((s) => s.copyScenario);
+  const setScenario = useProjectStore((s) => s.setScenario);
   const [primary, setPrimary] = useState<ScenarioKey>(storeScenario);
   const [compareOn, setCompareOn] = useState(false);
+  const [summary, setSummary] = useState<ApplyAllSummary | null>(null);
+
+  /** 一键应用建议：作用于「优化后」场景；若当前在改造前，先复制方案再切换 */
+  const handleApply = (issue: Issue) => {
+    if (!issue.fix) return;
+    if (primary === 'before') {
+      copyScenario('before', 'after');
+      setPrimary('after');
+      setScenario('after');
+    }
+    applyFix('after', issue.fix);
+  };
+
+  /** 一键全部优化：作用于「优化后」场景；若当前在改造前，先复制方案再切换 */
+  const handleApplyAll = () => {
+    let target: ScenarioKey = primary;
+    if (primary === 'before') {
+      copyScenario('before', 'after');
+      setPrimary('after');
+      setScenario('after');
+      target = 'after';
+    }
+    const result = applyAllFixes(target);
+    setSummary(result);
+  };
 
   const other: ScenarioKey = primary === 'before' ? 'after' : 'before';
   const primaryResult = useAnalysis(project, primary);
@@ -184,10 +213,26 @@ export function ReportClient() {
 
         {/* 问题清单 */}
         <section className="print-block">
-          <h2 className="mb-3 text-sm font-semibold text-ink">
-            问题清单与优化建议（{primaryResult.issues.length} 项）
-          </h2>
-          <IssueList issues={primaryResult.issues} defaultExpanded />
+          <div className="mb-3 flex flex-wrap items-center justify-between gap-3">
+            <h2 className="text-sm font-semibold text-ink">
+              问题清单与优化建议（{primaryResult.issues.length} 项）
+            </h2>
+            <div className="flex items-center gap-2 no-print">
+              <button
+                type="button"
+                onClick={handleApplyAll}
+                disabled={primaryResult.issues.length === 0}
+                className="rounded-lg bg-jade px-4 py-1.5 text-sm font-medium text-white transition hover:bg-jade-deep disabled:cursor-not-allowed disabled:opacity-40"
+              >
+                一键全部优化
+              </button>
+            </div>
+          </div>
+          <IssueList issues={primaryResult.issues} defaultExpanded onApply={handleApply} />
+
+          {summary ? (
+            <ApplyAllSummaryPanel summary={summary} onClose={() => setSummary(null)} />
+          ) : null}
         </section>
 
         {/* 对比方案缩略图 */}
@@ -215,6 +260,77 @@ export function ReportClient() {
           </p>
         </footer>
       </article>
+    </div>
+  );
+}
+
+/* ------------------------------------------------------------------ */
+/* 一键全部优化结果摘要                                                */
+/* ------------------------------------------------------------------ */
+
+function StatusBadge({ status }: { status: ApplyStatus }) {
+  const applied = status === 'applied';
+  return (
+    <span
+      className={`mt-0.5 inline-flex shrink-0 items-center rounded-full px-2 py-0.5 text-[10px] font-medium ${
+        applied ? 'bg-jade/15 text-jade-deep' : 'bg-clay/15 text-clay'
+      }`}
+    >
+      {applied ? '已优化' : '需手动'}
+    </span>
+  );
+}
+
+function ApplyAllSummaryPanel({
+  summary,
+  onClose,
+}: {
+  summary: ApplyAllSummary;
+  onClose: () => void;
+}) {
+  const delta = summary.finishedScore - summary.startedScore;
+  return (
+    <div className="no-print mt-5 rounded-xl border border-jade/30 bg-paper-deep p-4">
+      <div className="flex items-start justify-between gap-3">
+        <div>
+          <h3 className="text-sm font-semibold text-ink">优化结果摘要</h3>
+          <p className="mt-1 text-xs text-muted">
+            已自动优化{' '}
+            <span className="font-medium text-jade-deep">{summary.appliedCount}</span> 项，需手动处理{' '}
+            <span className="font-medium text-clay">{summary.skippedCount}</span> 项；总分{' '}
+            <span className="tabular-nums">{summary.startedScore}</span> →{' '}
+            <span className="tabular-nums font-medium text-ink">{summary.finishedScore}</span>
+            <span className={delta >= 0 ? 'ml-1 text-jade' : 'ml-1 text-clay'}>
+              （{delta >= 0 ? '+' : ''}
+              {delta}）
+            </span>
+          </p>
+        </div>
+        <button
+          type="button"
+          onClick={onClose}
+          className="shrink-0 text-xs text-muted underline-offset-2 hover:text-ink hover:underline"
+        >
+          收起
+        </button>
+      </div>
+
+      <ul className="mt-3 divide-y divide-line/70">
+        {summary.items.map((item, i) => (
+          <li key={`${item.ruleId}-${i}`} className="flex items-start gap-3 py-2">
+            <StatusBadge status={item.status} />
+            <div className="min-w-0 flex-1">
+              <p className="text-xs font-medium text-ink">{item.ruleName}</p>
+              <p className="mt-0.5 text-[11px] leading-relaxed text-muted">{item.change}</p>
+            </div>
+          </li>
+        ))}
+      </ul>
+
+      <p className="mt-3 text-[11px] leading-relaxed text-muted">
+        自动优化仅调整家具朝向与相对位置，不改变墙体与房间结构；结构性问题仍需你手动调整。
+        如需回退，请在编辑器中使用「撤销」（一步即可恢复全部自动优化）。
+      </p>
     </div>
   );
 }

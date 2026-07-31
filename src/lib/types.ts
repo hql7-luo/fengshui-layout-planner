@@ -104,6 +104,21 @@ export interface RuleHit {
   marker: Point;
   /** 补充说明，例如实测距离 */
   detail?: string;
+  /** 可选的「一键应用建议」修正动作，仅部分规则可自动修正 */
+  fix?: FixAction;
+}
+
+/**
+ * 单条「应用建议」修正动作。作用于某个元素：
+ * - rotationDelta：顺时针旋转增量（度，0~360）
+ * - dx / dy：平移增量（米，画布坐标方向）；应用时会乘以 pixelsPerMeter 转为像素
+ * 平移与旋转可同时生效。
+ */
+export interface FixAction {
+  targetId: string;
+  rotationDelta?: number;
+  dx?: number;
+  dy?: number;
 }
 
 export interface AnalysisContext {
@@ -165,6 +180,8 @@ export interface Issue {
   detail?: string;
   /** 本次命中实际扣分（考虑重复衰减后） */
   appliedPenalty: number;
+  /** 可选的「一键应用建议」修正动作 */
+  fix?: FixAction;
 }
 
 export interface AnalysisResult {
@@ -174,4 +191,34 @@ export interface AnalysisResult {
   counts: Record<Severity, number>;
   /** 参与评估的元素数量，便于提示用户信息是否充足 */
   elementCount: number;
+}
+
+/* ------------------------------------------------------------------ */
+/* 一键全部优化摘要                                                    */
+/* ------------------------------------------------------------------ */
+
+export type ApplyStatus = 'applied' | 'skipped';
+
+/** 单条优化的执行结果 */
+export interface ApplyAllItem {
+  ruleId: string;
+  ruleName: string;
+  severity: Severity;
+  status: ApplyStatus;
+  /** 具体改动内容（已优化为改动说明，需手动为原因） */
+  change: string;
+  /** 被修改元素的名称与目标 id（仅已优化时有） */
+  targetName?: string;
+  targetId?: string;
+}
+
+/** 「一键全部优化」执行后的整体摘要 */
+export interface ApplyAllSummary {
+  appliedCount: number;
+  skippedCount: number;
+  /** 优化前总分 */
+  startedScore: number;
+  /** 优化后总分 */
+  finishedScore: number;
+  items: ApplyAllItem[];
 }

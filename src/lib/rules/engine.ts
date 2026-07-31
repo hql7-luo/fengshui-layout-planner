@@ -62,6 +62,7 @@ export function analyzePlan(
         elementIds: hit.elementIds,
         marker: hit.marker,
         detail: hit.detail,
+        fix: hit.fix,
         appliedPenalty: Math.round(applied * 10) / 10,
       });
     });
