@@ -21,9 +21,11 @@ interface IssueListProps {
   /** 是否默认展开全部细节（报告页用 true） */
   defaultExpanded?: boolean;
   onFocus?: (issue: Issue) => void;
+  /** 一键应用建议；仅当 issue.fix 存在时按钮才会出现 */
+  onApply?: (issue: Issue) => void;
 }
 
-export function IssueList({ issues, defaultExpanded = false, onFocus }: IssueListProps) {
+export function IssueList({ issues, defaultExpanded = false, onFocus, onApply }: IssueListProps) {
   if (issues.length === 0) {
     return (
       <div className="rounded-xl border border-jade/25 bg-jade-soft/50 px-4 py-6 text-center">
@@ -63,6 +65,7 @@ export function IssueList({ issues, defaultExpanded = false, onFocus }: IssueLis
                   index={index}
                   defaultExpanded={defaultExpanded}
                   onFocus={onFocus}
+                  onApply={onApply}
                 />
               ))}
             </ul>
@@ -77,11 +80,13 @@ function IssueCard({
   index,
   defaultExpanded,
   onFocus,
+  onApply,
 }: {
   issue: Issue;
   index: number;
   defaultExpanded: boolean;
   onFocus?: (issue: Issue) => void;
+  onApply?: (issue: Issue) => void;
 }) {
   const [open, setOpen] = useState(defaultExpanded);
   return (
@@ -106,7 +111,7 @@ function IssueCard({
             <p className="mt-1.5 text-xs leading-relaxed text-ink-soft">{issue.detail}</p>
           ) : null}
 
-          <div className="mt-2 flex flex-wrap gap-3 text-xs no-print">
+          <div className="mt-2 flex flex-wrap items-center gap-3 text-xs no-print">
             <button
               type="button"
               onClick={() => setOpen((v) => !v)}
@@ -121,6 +126,15 @@ function IssueCard({
                 className="text-ink-soft underline-offset-2 hover:underline"
               >
                 在图上定位
+              </button>
+            ) : null}
+            {issue.fix && onApply ? (
+              <button
+                type="button"
+                onClick={() => onApply(issue)}
+                className="rounded-md border border-jade/40 bg-jade/10 px-2 py-0.5 font-medium text-jade-deep transition hover:bg-jade/20"
+              >
+                一键应用建议
               </button>
             ) : null}
           </div>

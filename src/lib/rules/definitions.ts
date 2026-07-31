@@ -8,11 +8,15 @@ import {
   elementGap,
   facingCheck,
   mutuallyFacing,
+  normalize,
   roundTo,
+  sub,
+  toDeg,
 } from '../geometry';
 import type {
   AnalysisContext,
   BBox,
+  FixAction,
   PlanElement,
   Point,
   RuleDefinition,
@@ -84,6 +88,52 @@ function coverageGrid(ctx: AnalysisContext, divisions = 40): boolean[][] {
 }
 
 const WALL_TOLERANCE_M = 0.4;
+
+/* ------------------------------------------------------------------ */
+/* 一键修正（应用建议）辅助函数                                        */
+/* ------------------------------------------------------------------ */
+
+/** 归一化旋转增量到 [-180, 180]，取最短路径 */
+function shortestRotationDelta(target: number, current: number): number {
+  const d = (((target - current) % 360) + 540) % 360 - 180;
+  return roundTo(d, 1);
+}
+
+/**
+ * 让 el 的「正面」垂直于 el→other 的连线（即侧面对着 other）。
+ * 用于床、镜子等避免正对门/床的场景，旋转量取最近路径。
+ */
+function rotateFacingPerpendicular(el: PlanElement, other: PlanElement): FixAction {
+  const dir = normalize(sub(other, el));
+  const lineAngle = toDeg(Math.atan2(dir.y, dir.x));
+  const cand1 = lineAngle; // rotation 使 facing ⟂ 连线
+  const cand2 = lineAngle - 180;
+  const delta =
+    Math.abs(shortestRotationDelta(cand1, el.rotation)) <=
+    Math.abs(shortestRotationDelta(cand2, el.rotation))
+      ? shortestRotationDelta(cand1, el.rotation)
+      : shortestRotationDelta(cand2, el.rotation);
+  return { targetId: el.id, rotationDelta: delta };
+}
+
+/**
+ * 让 el 的「背面」转向房间中心（即让床头/书桌/沙发背靠对侧墙）。
+ * 无房间信息时回退为旋转 180°。
+ */
+function rotateBackToRoom(el: PlanElement, room?: PlanElement): FixAction {
+  if (!room) return { targetId: el.id, rotationDelta: 180 };
+  const back = backMidpoint(el);
+  const dir = normalize(sub({ x: room.x, y: room.y }, back));
+  const backAngle = toDeg(Math.atan2(dir.y, dir.x)); // 背面应指向房间中心
+  const targetRotation = backAngle - 270; // 背面角度 = 270 + rotation
+  return { targetId: el.id, rotationDelta: shortestRotationDelta(targetRotation, el.rotation) };
+}
+
+/** 把 from 沿 from→to 连线推开 distanceM 米（用于灶台/水槽错位） */
+function pushAway(from: PlanElement, to: PlanElement, distanceM: number): FixAction {
+  const dir = normalize(sub(to, from));
+  return { targetId: from.id, dx: dir.x * distanceM, dy: dir.y * distanceM };
+}
 
 /* ------------------------------------------------------------------ */
 /* 规则定义                                                            */
@@ -300,6 +350,7 @@ export const RULES: RuleDefinition[] = [
                 ctx,
                 distance(bed, door),
               )} 米。`,
+              fix: rotateFacingPerpendicular(bed, door),
             });
           }
         }
@@ -323,12 +374,14 @@ export const RULES: RuleDefinition[] = [
     evaluate: (ctx) => {
       const hits: RuleHit[] = [];
       for (const bed of ctx.byType('bed')) {
+        const room = ctx.roomOf(bed);
         const gap = backWallGap(ctx, bed);
         if (gap > WALL_TOLERANCE_M) {
           hits.push({
             elementIds: [bed.id],
             marker: backMidpoint(bed),
             detail: `床头与最近墙体距离约 ${roundTo(gap, 2)} 米。`,
+            fix: rotateBackToRoom(bed, room),
           });
         }
       }
@@ -358,6 +411,7 @@ export const RULES: RuleDefinition[] = [
               elementIds: [mirror.id, bed.id],
               marker: markerOf(mirror, bed),
               detail: `镜面与床中心相距约 ${meters(ctx, distance(mirror, bed))} 米。`,
+              fix: rotateFacingPerpendicular(mirror, bed),
             });
           }
         }
@@ -388,6 +442,7 @@ export const RULES: RuleDefinition[] = [
               elementIds: [stove.id, sink.id],
               marker: markerOf(stove, sink),
               detail: `灶台与水槽相距约 ${meters(ctx, distance(stove, sink))} 米且正面相对。`,
+              fix: pushAway(sink, stove, 0.7),
             });
           }
         }
@@ -414,10 +469,12 @@ export const RULES: RuleDefinition[] = [
           // 使用边缘净距（而非中心距）：这里衡量的是两者之间可用的备餐台面宽度
           const gap = ctx.toMeters(elementGap(stove, sink));
           if (gap < 0.6) {
+            const move = Math.max(0, 0.7 - gap) + 0.15;
             hits.push({
               elementIds: [stove.id, sink.id],
               marker: markerOf(stove, sink),
               detail: `两者之间净台面约 ${roundTo(gap, 2)} 米，小于建议的 0.6 米。`,
+              fix: pushAway(sink, stove, move),
             });
           }
         }
@@ -637,12 +694,14 @@ export const RULES: RuleDefinition[] = [
     evaluate: (ctx) => {
       const hits: RuleHit[] = [];
       for (const desk of ctx.byType('desk')) {
+        const room = ctx.roomOf(desk);
         const gap = backWallGap(ctx, desk);
         if (gap > WALL_TOLERANCE_M) {
           hits.push({
             elementIds: [desk.id],
             marker: backMidpoint(desk),
             detail: `书桌背面与最近墙体距离约 ${roundTo(gap, 2)} 米。`,
+            fix: rotateBackToRoom(desk, room),
           });
         }
       }
@@ -665,12 +724,14 @@ export const RULES: RuleDefinition[] = [
     evaluate: (ctx) => {
       const hits: RuleHit[] = [];
       for (const sofa of ctx.byType('sofa')) {
+        const room = ctx.roomOf(sofa);
         const gap = backWallGap(ctx, sofa);
         if (gap > WALL_TOLERANCE_M) {
           hits.push({
             elementIds: [sofa.id],
             marker: backMidpoint(sofa),
             detail: `沙发背面与最近墙体距离约 ${roundTo(gap, 2)} 米。`,
+            fix: rotateBackToRoom(sofa, room),
           });
         }
       }

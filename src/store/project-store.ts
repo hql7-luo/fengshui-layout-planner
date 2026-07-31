@@ -4,7 +4,18 @@ import { create } from 'zustand';
 import { createJSONStorage, persist } from 'zustand/middleware';
 import { ELEMENT_SPECS } from '@/lib/element-catalog';
 import { createProjectFromSample, SAMPLE_CANVAS, SAMPLE_PIXELS_PER_METER } from '@/lib/samples';
-import type { ElementType, PlanElement, PlanImage, Project, ScenarioKey } from '@/lib/types';
+import { normalizeDeg } from '@/lib/geometry';
+import { applyAllFixesToElements } from '@/lib/apply-fixes';
+import { analyzePlan, type ContextOptions } from '@/lib/rules/engine';
+import type {
+  ApplyAllSummary,
+  ElementType,
+  FixAction,
+  PlanElement,
+  PlanImage,
+  Project,
+  ScenarioKey,
+} from '@/lib/types';
 
 const STORAGE_KEY = 'fengshui-layout-planner:v1';
 const HISTORY_LIMIT = 50;
@@ -37,6 +48,10 @@ export interface ProjectState {
 
   setScenario: (scenario: ScenarioKey) => void;
   copyScenario: (from: ScenarioKey, to: ScenarioKey) => void;
+  /** 在指定场景上应用一条「应用建议」修正动作（作用于优化后场景） */
+  applyFix: (scenario: ScenarioKey, fix: FixAction) => void;
+  /** 一键全部优化：对指定场景自动执行所有可修正项，返回优化结果摘要 */
+  applyAllFixes: (scenario: ScenarioKey) => ApplyAllSummary | null;
 
   addElement: (type: ElementType, position?: { x: number; y: number }) => string | null;
   updateElement: (id: string, patch: Partial<PlanElement>, options?: { commit?: boolean }) => void;
@@ -225,6 +240,96 @@ export const useProjectStore = create<ProjectState>()(
             }),
             { recordHistory: false },
           ),
+
+        applyFix: (scenario, fix) => {
+          const state = get();
+          const id = state.currentId;
+          if (!id) return;
+          const project = state.projects[id];
+          if (!project) return;
+          const elements = project.scenarios[scenario].elements;
+          const idx = elements.findIndex((e) => e.id === fix.targetId);
+          if (idx < 0) return;
+          const target = elements[idx];
+          const ppm = project.pixelsPerMeter;
+          const next: PlanElement = {
+            ...target,
+            x: target.x + (fix.dx ?? 0) * ppm,
+            y: target.y + (fix.dy ?? 0) * ppm,
+            rotation: normalizeDeg(target.rotation + (fix.rotationDelta ?? 0)),
+          };
+          const updatedElements = elements.map((e, i) => (i === idx ? next : e));
+          set((s) => ({
+            projects: {
+              ...s.projects,
+              [id]: {
+                ...project,
+                updatedAt: Date.now(),
+                scenarios: {
+                  ...project.scenarios,
+                  [scenario]: { elements: updatedElements },
+                },
+              },
+            },
+          }));
+        },
+
+        applyAllFixes: (scenario) => {
+          const state = get();
+          const id = state.currentId;
+          if (!id) return null;
+          const project = state.projects[id];
+          if (!project) return null;
+          const elements = project.scenarios[scenario].elements;
+          if (elements.length === 0) return null;
+
+          const options: ContextOptions = {
+            pixelsPerMeter: project.pixelsPerMeter,
+            northAngle: project.northAngle,
+            canvas: project.canvas,
+          };
+
+          const startedScore = analyzePlan(elements, options).overall;
+          const { elements: nextElements, items } = applyAllFixesToElements(
+            elements,
+            options,
+            project.pixelsPerMeter,
+          );
+          const finishedScore = analyzePlan(nextElements, options).overall;
+
+          const summary: ApplyAllSummary = {
+            appliedCount: items.filter((i) => i.status === 'applied').length,
+            skippedCount: items.filter((i) => i.status === 'skipped').length,
+            startedScore,
+            finishedScore,
+            items,
+          };
+
+          // 整批只记一个撤销点，一次撤销即可回退全部自动优化
+          const historyKey = `${id}:${scenario}`;
+          const nextHistory = { ...state.history };
+          const entry = nextHistory[historyKey] ?? { past: [], future: [] };
+          nextHistory[historyKey] = {
+            past: [...entry.past, elements].slice(-HISTORY_LIMIT),
+            future: [],
+          };
+
+          set({
+            projects: {
+              ...state.projects,
+              [id]: {
+                ...project,
+                updatedAt: Date.now(),
+                scenarios: {
+                  ...project.scenarios,
+                  [scenario]: { elements: nextElements },
+                },
+              },
+            },
+            history: nextHistory,
+          });
+          return summary;
+        },
 
         addElement: (type, position) => {
           const state = get();

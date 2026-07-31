@@ -391,3 +391,93 @@ describe('示例户型', () => {
     }
   });
 });
+
+/* ------------------------------------------------------------------ */
+/* 一键应用建议（fix）                                                  */
+/* ------------------------------------------------------------------ */
+
+describe('一键应用建议 fix', () => {
+  const FIXABLE = new Set([
+    'bed-faces-door',
+    'bed-head-no-wall',
+    'mirror-faces-bed',
+    'stove-faces-sink',
+    'stove-sink-too-close',
+    'desk-no-wall-behind',
+    'sofa-no-wall-behind',
+  ]);
+
+  it('bed-faces-door 问题携带可作用于床的旋转修正', () => {
+    const elements = [
+      m('master_bedroom', 3, 3, { w: 4, h: 4 }),
+      m('bed', 3, 2.2),
+      m('room_door', 3, 5, { r: 0 }),
+    ];
+    const result = analyzePlan(elements, OPTIONS);
+    const issue = result.issues.find((i) => i.ruleId === 'bed-faces-door');
+    expect(issue).toBeTruthy();
+    expect(issue!.fix).toBeDefined();
+    const bed = elements.find((e) => e.type === 'bed')!;
+    expect(issue!.fix!.targetId).toBe(bed.id);
+    expect(typeof issue!.fix!.rotationDelta).toBe('number');
+  });
+
+  it('应用旋转修正后 bed-faces-door 不再命中', () => {
+    const elements = [
+      m('master_bedroom', 3, 3, { w: 4, h: 4 }),
+      m('bed', 3, 2.2),
+      m('room_door', 3, 5, { r: 0 }),
+    ];
+    const result = analyzePlan(elements, OPTIONS);
+    const issue = result.issues.find((i) => i.ruleId === 'bed-faces-door')!;
+    const bed = elements.find((e) => e.type === 'bed')!;
+    const fixed = elements.map((e) =>
+      e.id === bed.id
+        ? { ...e, rotation: ((e.rotation + (issue.fix!.rotationDelta ?? 0)) % 360 + 360) % 360 }
+        : e,
+    );
+    const after = analyzePlan(fixed, OPTIONS);
+    expect(after.issues.some((i) => i.ruleId === 'bed-faces-door')).toBe(false);
+  });
+
+  it('fix 是确定性的：相同输入两次结果完全一致', () => {
+    const elements = [
+      m('master_bedroom', 3, 3, { w: 4, h: 4 }),
+      m('bed', 3, 2.2),
+      m('room_door', 3, 5, { r: 0 }),
+    ];
+    const a = analyzePlan(elements, OPTIONS).issues.find((i) => i.ruleId === 'bed-faces-door')!
+      .fix;
+    const b = analyzePlan(elements, OPTIONS).issues.find((i) => i.ruleId === 'bed-faces-door')!
+      .fix;
+    expect(b).toEqual(a);
+  });
+
+  it('结构性规则（卫生间居中）不提供一键修正', () => {
+    const result = analyzePlan(sampleElements('bathroom-in-center'), {
+      pixelsPerMeter: SAMPLE_PIXELS_PER_METER,
+      northAngle: 0,
+      canvas: SAMPLE_CANVAS,
+    });
+    const centerIssue = result.issues.find((i) => i.ruleId === 'bathroom-in-center');
+    expect(centerIssue).toBeTruthy();
+    expect(centerIssue!.fix).toBeUndefined();
+  });
+
+  it('所有带 fix 的问题都属于 7 条可自动修复规则', () => {
+    for (const sample of SAMPLES) {
+      const result = analyzePlan(sampleElements(sample.id), {
+        pixelsPerMeter: SAMPLE_PIXELS_PER_METER,
+        northAngle: sample.northAngle,
+        canvas: SAMPLE_CANVAS,
+      });
+      for (const issue of result.issues) {
+        if (issue.fix) {
+          expect(FIXABLE.has(issue.ruleId), `${sample.id}: ${issue.ruleId} 不应带 fix`).toBe(
+            true,
+          );
+        }
+      }
+    }
+  });
+});
