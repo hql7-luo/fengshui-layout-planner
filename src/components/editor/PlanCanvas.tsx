@@ -35,26 +35,29 @@ interface PlanCanvasProps {
   onChange: (id: string, patch: Partial<PlanElement>) => void;
 }
 
+/**
+ * 加载底图。把 src 与已加载的图片一起存入 state，
+ * 通过「派生比较」而不是在 effect 中同步 setState 来处理 src 变更与清空。
+ */
 function useHtmlImage(src: string | undefined) {
-  const [image, setImage] = useState<HTMLImageElement | null>(null);
+  const [loaded, setLoaded] = useState<{ src: string; image: HTMLImageElement } | null>(null);
+
   useEffect(() => {
+    if (!src) return;
     let alive = true;
-    if (!src) {
-      setImage(null);
-      return;
-    }
     loadImage(src)
-      .then((img) => {
-        if (alive) setImage(img);
+      .then((image) => {
+        if (alive) setLoaded({ src, image });
       })
       .catch(() => {
-        if (alive) setImage(null);
+        /* 加载失败时保持无底图状态，由下方派生逻辑返回 null */
       });
     return () => {
       alive = false;
     };
   }, [src]);
-  return image;
+
+  return loaded && loaded.src === src ? loaded.image : null;
 }
 
 export default function PlanCanvas({

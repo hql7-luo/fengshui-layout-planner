@@ -401,7 +401,7 @@ export const RULES: RuleDefinition[] = [
     category: 'function',
     severity: 'medium',
     impacts: { function: 5 },
-    condition: '灶台与水槽中心距小于 0.6 米。',
+    condition: '灶台边缘与水槽边缘之间的净台面宽度小于 0.6 米。',
     traditional: '传统上讲究水火各有其位，不宜紧贴。',
     modern:
       '两者之间缺少备餐台面，切配无处落脚；实际使用中容易出现热锅与湿手交叉作业的安全隐患。行业常见做法是保留 60～90 厘米的操作面。',
@@ -411,12 +411,13 @@ export const RULES: RuleDefinition[] = [
       const hits: RuleHit[] = [];
       for (const stove of ctx.byType('stove')) {
         for (const sink of ctx.byType('sink')) {
-          const d = ctx.toMeters(distance(stove, sink));
-          if (d < 0.6) {
+          // 使用边缘净距（而非中心距）：这里衡量的是两者之间可用的备餐台面宽度
+          const gap = ctx.toMeters(elementGap(stove, sink));
+          if (gap < 0.6) {
             hits.push({
               elementIds: [stove.id, sink.id],
               marker: markerOf(stove, sink),
-              detail: `实测中心距约 ${roundTo(d, 2)} 米，小于建议的 0.6 米。`,
+              detail: `两者之间净台面约 ${roundTo(gap, 2)} 米，小于建议的 0.6 米。`,
             });
           }
         }
