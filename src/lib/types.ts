@@ -22,7 +22,7 @@ export type RoomType =
 
 export type OpeningType = 'entry_door' | 'room_door' | 'window';
 
-export type FurnitureType = 'bed' | 'sofa' | 'desk' | 'stove' | 'sink' | 'mirror';
+export type FurnitureType = 'bed' | 'sofa' | 'desk' | 'stove' | 'sink' | 'mirror' | 'screen';
 
 export type ElementType = RoomType | OpeningType | FurnitureType;
 
@@ -59,6 +59,8 @@ export type ScenarioKey = 'before' | 'after';
 
 export interface Scenario {
   elements: PlanElement[];
+  /** 该场景的结构模型（墙体/门洞/窗洞/区域），缺省时回退为项目级 structure */
+  structure?: StructureModel;
 }
 
 export interface PlanImage {
@@ -78,6 +80,8 @@ export interface Project {
   northAngle: number;
   pixelsPerMeter: number;
   scenarios: Record<ScenarioKey, Scenario>;
+  /** 结构模型（墙体/门洞/窗洞/区域）；场景级 structure 优先，缺省回退到此 */
+  structure?: StructureModel;
   /** 来源示例 id（如果由示例创建） */
   sampleId?: string;
 }
@@ -191,6 +195,144 @@ export interface AnalysisResult {
   counts: Record<Severity, number>;
   /** 参与评估的元素数量，便于提示用户信息是否充足 */
   elementCount: number;
+}
+
+/* ------------------------------------------------------------------ */
+/* 墙体结构模型                                                        */
+/* ------------------------------------------------------------------ */
+
+export type WallKind = 'exterior' | 'load-bearing' | 'partition';
+
+/** 一段独立墙体：起点终点（像素）、厚度、类型、是否可移动、相邻房间、是否含门窗 */
+export interface Wall {
+  id: string;
+  kind: WallKind;
+  x1: number;
+  y1: number;
+  x2: number;
+  y2: number;
+  thicknessM: number;
+  /** 由 kind 推导：exterior / load-bearing 恒为 false，partition 为 true */
+  movable: boolean;
+  adjacentRooms: [string | null, string | null];
+  hasDoor: boolean;
+  hasWindow: boolean;
+}
+
+export type OpeningKind = 'entry' | 'room' | 'bathroom' | 'kitchen' | 'balcony' | 'window';
+
+/** 门洞：位于某段墙体上，linkedElementId 指向对应的 room_door / entry_door 元素 */
+export interface DoorOpening {
+  id: string;
+  wallId: string;
+  /** 门洞中心（画布像素） */
+  point: Point;
+  widthM: number;
+  kind: OpeningKind;
+  linkedElementId?: string;
+  /** 入户门默认不可移动，除非用户明确允许 */
+  movable: boolean;
+}
+
+export interface WindowOpening {
+  id: string;
+  wallId: string;
+  point: Point;
+  widthM: number;
+}
+
+export type ZoneKind = 'wet' | 'fixed';
+
+/** 不可移动区域：厨房/卫生间湿区、管井、柱体、楼梯等 */
+export interface Zone {
+  id: string;
+  kind: ZoneKind;
+  x: number;
+  y: number;
+  w: number;
+  h: number;
+  roomId?: string;
+  movable: boolean;
+}
+
+/** 户型结构模型。loadBearingMarked 表示用户已标记承重墙，未标记时方案仅作概念候选 */
+export interface StructureModel {
+  walls: Wall[];
+  doors: DoorOpening[];
+  windows: WindowOpening[];
+  zones: Zone[];
+  loadBearingMarked: boolean;
+}
+
+/* ------------------------------------------------------------------ */
+/* 结构优化候选方案                                                    */
+/* ------------------------------------------------------------------ */
+
+export type ModificationKind =
+  | 'relocate-door'
+  | 'offset-door'
+  | 'seal-door'
+  | 'add-partition'
+  | 'add-screen'
+  | 'add-node'
+  | 'merge-corridor'
+  | 'furniture-fix';
+
+/** 单条优化动作的改动记录（用于结果摘要） */
+export interface PlanModification {
+  kind: ModificationKind;
+  /** 中文动作名，例如「改门洞位置」「新增玄关隔断」 */
+  label: string;
+  description: string;
+  /** 新增墙体（玄关短墙、隔断） */
+  addedWalls?: Wall[];
+  /** 需封闭的旧门洞 id */
+  sealedDoorIds?: string[];
+  /** 移动的元素（门洞移位） */
+  movedElementIds?: Array<{ id: string; x: number; y: number; rotation?: number }>;
+  /** 新增的元素（玄关屏风等） */
+  addedElements?: PlanElement[];
+}
+
+export type ChangeDegree = 'minimal' | 'balanced' | 'major';
+export type ProblemType =
+  | 'entry-bathroom'
+  | 'door-door'
+  | 'long-corridor'
+  | 'furniture'
+  | 'mixed';
+
+/** 单条结构优化候选方案（A=最小改动 / B=综合平衡 / C=评分最高） */
+export interface CandidatePlan {
+  id: 'A' | 'B' | 'C';
+  title: string;
+  problemType: ProblemType;
+  feasible: boolean;
+  /** 不可行时的具体原因，例如「未标记承重墙 / 房间尺寸不足 / 湿区不可移动 / 通道宽度不合格 / 没有足够墙面移动门洞」 */
+  infeasibleReason?: string;
+  modifications: PlanModification[];
+  /** 应用后的元素布局（原始不会被覆盖，需用户点击「应用方案」） */
+  projectedElements: PlanElement[];
+  /** 应用后的结构模型 */
+  projectedStructure: StructureModel;
+  originalScore: number;
+  predictedScore: number;
+  predictedCategories: Record<ScoreCategory, number>;
+  solvedIssueKeys: string[];
+  remainingIssueKeys: string[];
+  /** 优化价值 = 解决问题扣分 − 改动成本 − 约束惩罚 */
+  valueScore: number;
+  changeDegree: ChangeDegree;
+  risks: string[];
+  /** 用户未标记承重墙时为 true，方案仅作概念候选、不可直接施工 */
+  conceptOnly: boolean;
+}
+
+export interface OptimizationResult {
+  plans: CandidatePlan[];
+  /** 是否存在可生成结构方案的问题 */
+  hasStructuralIssue: boolean;
+  generatedAt: number;
 }
 
 /* ------------------------------------------------------------------ */

@@ -45,8 +45,28 @@ export const SEVERITY_ORDER: Record<Severity, number> = {
   low: 2,
 };
 
-/** 同一规则重复命中时的扣分衰减系数 */
-export const OCCURRENCE_DECAY = [1, 0.6, 0.4];
+/**
+ * 结构性问题规则：涉及门位、动线、隐私层级等「空间结构」类问题。
+ * 用于总分上限判定：存在两个及以上结构性 medium 问题时，总分原则上不高于 92。
+ */
+export const STRUCTURAL_RULE_IDS = new Set([
+  'entry-door-faces-bathroom',
+  'entry-door-faces-bedroom-door',
+  'door-faces-door',
+  'bathroom-in-center',
+  'long-corridor',
+  'through-draft',
+  'living-room-far-from-entry',
+  'master-bedroom-privacy',
+  'bathroom-faces-kitchen',
+]);
+
+/** 总分硬上限（依据问题严重度） */
+export const SCORE_CAP_HIGH = 89; // 存在任意 high 问题时
+export const SCORE_CAP_STRUCTURAL_MEDIUM = 92; // 存在两个及以上结构性 medium 问题时
+
+/** 同一规则重复命中时的扣分衰减系数（适当放缓，避免多个问题被过度稀释） */
+export const OCCURRENCE_DECAY = [1, 0.8, 0.6];
 
 export function decayFactor(index: number): number {
   return OCCURRENCE_DECAY[index] ?? 0.3;

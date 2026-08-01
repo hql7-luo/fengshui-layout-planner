@@ -6,15 +6,22 @@ import { ELEMENT_SPECS } from '@/lib/element-catalog';
 import { createProjectFromSample, SAMPLE_CANVAS, SAMPLE_PIXELS_PER_METER } from '@/lib/samples';
 import { normalizeDeg } from '@/lib/geometry';
 import { applyAllFixesToElements } from '@/lib/apply-fixes';
+import { generateCandidatePlans, buildStructureFromElements } from '@/lib/optimizer';
+import type { LayerId, LayerRegion } from '@/lib/analysis-layers';
+import { EMPTY_ENVIRONMENT, type EnvironmentData } from '@/lib/environment';
 import { analyzePlan, type ContextOptions } from '@/lib/rules/engine';
 import type {
   ApplyAllSummary,
+  CandidatePlan,
   ElementType,
   FixAction,
+  OptimizationResult,
   PlanElement,
   PlanImage,
   Project,
   ScenarioKey,
+  StructureModel,
+  Wall,
 } from '@/lib/types';
 
 const STORAGE_KEY = 'fengshui-layout-planner:v1';
@@ -52,6 +59,38 @@ export interface ProjectState {
   applyFix: (scenario: ScenarioKey, fix: FixAction) => void;
   /** 一键全部优化：对指定场景自动执行所有可修正项，返回优化结果摘要 */
   applyAllFixes: (scenario: ScenarioKey) => ApplyAllSummary | null;
+
+  /** 结构优化：基于当前场景生成 A/B/C 候选方案（不覆盖原始方案） */
+  generateCandidates: () => void;
+  /** 预览某个候选方案（画布虚线旧墙 / 实线新墙对比） */
+  setPreviewPlan: (planId: string | null) => void;
+  /** 应用某个候选方案：复制当前场景到「优化后」并写入，原始方案保留在「改造前」 */
+  applyCandidate: (planId: string) => void;
+  /** 丢弃当前候选方案 */
+  discardCandidates: () => void;
+  /** 手动设置结构模型（手动绘制墙体后写入） */
+  setStructure: (structure: StructureModel) => void;
+  /** 手动新增一段墙体 */
+  addWall: (wall: Wall) => void;
+  /** 删除一段墙体 */
+  removeWall: (id: string) => void;
+  /** 标记是否已识别承重墙 */
+  setLoadBearingMarked: (marked: boolean) => void;
+  /** 当前候选方案与预览状态 */
+  candidates: OptimizationResult | null;
+  previewPlanId: string | null;
+  /** 分析图层开关（7 个图层独立控制） */
+  activeLayers: Record<LayerId, boolean>;
+  /** 图层整体透明度 0-1 */
+  layerOpacity: number;
+  /** 当前选中的图层区域（点击图例查看计算依据） */
+  selectedRegion: LayerRegion | null;
+  /** 土地规划环境数据接口（普通户型默认为空，不接入室内能量） */
+  environment: EnvironmentData;
+  toggleLayer: (id: LayerId) => void;
+  setLayerOpacity: (value: number) => void;
+  selectRegion: (region: LayerRegion | null) => void;
+  setEnvironment: (env: EnvironmentData) => void;
 
   addElement: (type: ElementType, position?: { x: number; y: number }) => string | null;
   updateElement: (id: string, patch: Partial<PlanElement>, options?: { commit?: boolean }) => void;
@@ -140,6 +179,20 @@ export const useProjectStore = create<ProjectState>()(
         scenario: 'before',
         selectedId: null,
         history: {},
+        candidates: null,
+        previewPlanId: null,
+        activeLayers: {
+          heatmap: false,
+          privacy: false,
+          airflow: false,
+          circulation: false,
+          daylight: false,
+          zoning: false,
+          energy: false,
+        },
+        layerOpacity: 0.55,
+        selectedRegion: null,
+        environment: EMPTY_ENVIRONMENT,
 
         createBlankProject: (name = '未命名户型') => {
           const project = blankProject(name);
@@ -330,6 +383,147 @@ export const useProjectStore = create<ProjectState>()(
           });
           return summary;
         },
+
+        generateCandidates: () => {
+          const state = get();
+          const id = state.currentId;
+          if (!id) return;
+          const project = state.projects[id];
+          if (!project) return;
+          const scenario = state.scenario;
+          const elements = project.scenarios[scenario].elements;
+          if (elements.length === 0) return;
+          const options: ContextOptions = {
+            pixelsPerMeter: project.pixelsPerMeter,
+            northAngle: project.northAngle,
+            canvas: project.canvas,
+          };
+          const scenarioStructure = project.scenarios[scenario].structure;
+          const projectStructure = project.structure;
+          const marked =
+            projectStructure?.loadBearingMarked ?? scenarioStructure?.loadBearingMarked ?? false;
+          const structure =
+            scenarioStructure ??
+            projectStructure ??
+            buildStructureFromElements(elements, marked, project.pixelsPerMeter);
+          const result = generateCandidatePlans({ elements, structure, options });
+          result.generatedAt = Date.now();
+          set({ candidates: result, previewPlanId: null });
+        },
+
+        setPreviewPlan: (planId) => set({ previewPlanId: planId }),
+
+        applyCandidate: (planId) => {
+          const state = get();
+          const id = state.currentId;
+          if (!id) return;
+          const project = state.projects[id];
+          if (!project || !state.candidates) return;
+          const plan = state.candidates.plans.find((p) => p.id === planId);
+          if (!plan) return;
+
+          // 复制当前场景到「改造前」作为原始基准，再写入「优化后」
+          const current = state.scenario;
+          const beforeElements = project.scenarios[current].elements;
+          const beforeStructure =
+            project.scenarios[current].structure ?? project.structure ?? null;
+
+          // 整批记一个撤销点
+          const historyKey = `${id}:after`;
+          const nextHistory = { ...state.history };
+          const entry = nextHistory[historyKey] ?? { past: [], future: [] };
+          nextHistory[historyKey] = {
+            past: [...entry.past, beforeElements].slice(-HISTORY_LIMIT),
+            future: [],
+          };
+
+          set({
+            projects: {
+              ...state.projects,
+              [id]: {
+                ...project,
+                updatedAt: Date.now(),
+                scenarios: {
+                  before: { elements: beforeElements.map((e) => ({ ...e })), structure: beforeStructure ? { ...beforeStructure } : undefined },
+                  after: {
+                    elements: plan.projectedElements.map((e) => ({ ...e })),
+                    structure: { ...plan.projectedStructure },
+                  },
+                },
+              },
+            },
+            scenario: 'after',
+            candidates: null,
+            previewPlanId: null,
+            history: nextHistory,
+          });
+        },
+
+        discardCandidates: () => set({ candidates: null, previewPlanId: null }),
+        toggleLayer: (id) => set((state) => ({ activeLayers: { ...state.activeLayers, [id]: !state.activeLayers[id] } })),
+        setLayerOpacity: (value) => set({ layerOpacity: Math.max(0, Math.min(1, value)) }),
+        selectRegion: (region) => set({ selectedRegion: region }),
+        setEnvironment: (env) => set({ environment: env }),
+
+        setStructure: (structure) =>
+          mutate((project) => {
+            const scenario = get().scenario;
+            return {
+              ...project,
+              scenarios: {
+                ...project.scenarios,
+                [scenario]: { ...project.scenarios[scenario], structure: { ...structure } },
+              },
+            };
+          }),
+
+        addWall: (wall) =>
+          mutate((project) => {
+            const scenario = get().scenario;
+            const base = project.scenarios[scenario].structure ??
+              project.structure ??
+              buildStructureFromElements(project.scenarios[scenario].elements, false, project.pixelsPerMeter);
+            const merged = { ...base, walls: [...base.walls, wall] };
+            return {
+              ...project,
+              scenarios: {
+                ...project.scenarios,
+                [scenario]: { ...project.scenarios[scenario], structure: merged },
+              },
+            };
+          }),
+
+        removeWall: (wid) =>
+          mutate((project) => {
+            const scenario = get().scenario;
+            const base = project.scenarios[scenario].structure ??
+              project.structure ??
+              buildStructureFromElements(project.scenarios[scenario].elements, false, project.pixelsPerMeter);
+            const merged = { ...base, walls: base.walls.filter((w) => w.id !== wid) };
+            return {
+              ...project,
+              scenarios: {
+                ...project.scenarios,
+                [scenario]: { ...project.scenarios[scenario], structure: merged },
+              },
+            };
+          }),
+
+        setLoadBearingMarked: (marked) =>
+          mutate((project) => {
+            const scenario = get().scenario;
+            const base = project.scenarios[scenario].structure ??
+              project.structure ??
+              buildStructureFromElements(project.scenarios[scenario].elements, false, project.pixelsPerMeter);
+            const merged = { ...base, loadBearingMarked: marked };
+            return {
+              ...project,
+              scenarios: {
+                ...project.scenarios,
+                [scenario]: { ...project.scenarios[scenario], structure: merged },
+              },
+            };
+          }),
 
         addElement: (type, position) => {
           const state = get();

@@ -185,6 +185,16 @@ export const ELEMENT_SPECS: Record<ElementType, ElementSpec> = {
     stroke: '#5b6b7e',
     hint: '箭头为镜面朝向，避免正对床。',
   },
+  screen: {
+    type: 'screen',
+    label: '玄关/屏风',
+    category: 'furniture',
+    defaultSize: [1.2, 0.12],
+    facing: 'none',
+    color: '#e7ddd0',
+    stroke: '#a07b54',
+    hint: '视线遮挡屏障（玄关柜、屏风、短隔墙）。可阻断门对门、入户对卫生间的直视轴线。',
+  },
 };
 
 export const ROOM_TYPES = Object.values(ELEMENT_SPECS)

@@ -1,7 +1,10 @@
 import {
   CATEGORY_WEIGHTS,
+  SCORE_CAP_HIGH,
+  SCORE_CAP_STRUCTURAL_MEDIUM,
   SCORE_CATEGORIES,
   SEVERITY_ORDER,
+  STRUCTURAL_RULE_IDS,
   decayFactor,
 } from '../scoring';
 import type {
@@ -86,8 +89,24 @@ export function analyzePlan(
   const counts: Record<Severity, number> = { high: 0, medium: 0, low: 0 };
   for (const issue of issues) counts[issue.severity] += 1;
 
+  // 严重问题硬上限：存在任意 high 问题时总分不高于 89；
+  // 存在两个及以上结构性 medium 问题时总分不高于 92。
+  let cappedOverall = overall;
+  if (counts.high >= 1) cappedOverall = Math.min(cappedOverall, SCORE_CAP_HIGH);
+  const structuralMedium = issues.filter(
+    (i) => i.severity === 'medium' && STRUCTURAL_RULE_IDS.has(i.ruleId),
+  ).length;
+  if (structuralMedium >= 2) cappedOverall = Math.min(cappedOverall, SCORE_CAP_STRUCTURAL_MEDIUM);
+  if (cappedOverall !== overall) {
+    // 按比例把扣减分配到五维，保持各维与总分一致，避免误导
+    const scale = cappedOverall / Math.max(1, overall);
+    for (const key of SCORE_CATEGORIES) {
+      categories[key] = Math.round(Math.max(0, Math.min(100, categories[key] * scale)));
+    }
+  }
+
   return {
-    overall,
+    overall: cappedOverall,
     categories,
     issues,
     counts,

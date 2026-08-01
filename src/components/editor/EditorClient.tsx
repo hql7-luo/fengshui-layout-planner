@@ -8,10 +8,12 @@ import { CategoryBars, IssueCounts, ScoreRing } from '@/components/analysis/Scor
 import { ElementPalette } from '@/components/editor/ElementPalette';
 import { EditorToolbar } from '@/components/editor/EditorToolbar';
 import { Inspector } from '@/components/editor/Inspector';
+import LayerPanel from '@/components/editor/LayerPanel';
 import { PlanSettings } from '@/components/editor/PlanSettings';
 import { useAnalysis } from '@/hooks/use-analysis';
 import { useHydrated } from '@/hooks/use-hydrated';
 import { ImageLoadError, readPlanImage } from '@/lib/image';
+import { computeLayers, type AllLayers } from '@/lib/analysis-layers';
 import { SAMPLES } from '@/lib/samples';
 import type { ElementType, Issue, PlanElement } from '@/lib/types';
 import {
@@ -66,6 +68,20 @@ export function EditorClient() {
 
   const result = useAnalysis(project, scenario);
   const issues = useMemo(() => result?.issues ?? [], [result]);
+
+  // 分析图层随当前场景（改造前 / 改造后）实时重算；computeLayers 为纯函数，不修改 elements
+  const layers = useMemo<AllLayers | null>(() => {
+    if (!result || !project) return null;
+    return computeLayers({
+      elements,
+      analysis: result,
+      options: {
+        pixelsPerMeter: project.pixelsPerMeter,
+        northAngle: project.northAngle,
+        canvas: project.canvas,
+      },
+    });
+  }, [result, project, elements]);
 
   const selected: PlanElement | null = useMemo(
     () => elements.find((el) => el.id === selectedId) ?? null,
@@ -202,6 +218,9 @@ export function EditorClient() {
               onCanvas={setCanvasSize}
             />
           </section>
+          <section>
+            <LayerPanel layers={layers} />
+          </section>
         </aside>
 
         {/* 中：画布 */}
@@ -213,6 +232,7 @@ export function EditorClient() {
             selectedId={selectedId}
             showIssues={showIssues}
             zoom={zoom}
+            layers={layers}
             onSelect={select}
             onChange={(id, patch) => updateElement(id, patch)}
           />
