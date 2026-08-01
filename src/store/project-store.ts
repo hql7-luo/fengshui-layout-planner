@@ -27,6 +27,9 @@ import type {
 const STORAGE_KEY = 'fengshui-layout-planner:v1';
 const HISTORY_LIMIT = 50;
 
+/** 稳定引用，避免 useSyncExternalStore 在 project 为 null 时无限循环 */
+const EMPTY_ELEMENTS: PlanElement[] = [];
+
 interface HistoryEntry {
   past: PlanElement[][];
   future: PlanElement[][];
@@ -656,7 +659,7 @@ export function selectCurrentProject(state: ProjectState): Project | null {
 
 export function selectCurrentElements(state: ProjectState): PlanElement[] {
   const project = selectCurrentProject(state);
-  return project ? project.scenarios[state.scenario].elements : [];
+  return project ? project.scenarios[state.scenario].elements : EMPTY_ELEMENTS;
 }
 
 export function selectCanUndo(state: ProjectState): boolean {

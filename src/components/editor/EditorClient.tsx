@@ -5,6 +5,7 @@ import Link from 'next/link';
 import { useCallback, useEffect, useMemo, useState } from 'react';
 import { IssueList } from '@/components/analysis/IssueList';
 import { CategoryBars, IssueCounts, ScoreRing } from '@/components/analysis/ScoreSummary';
+import { CandidatePanel } from '@/components/editor/CandidatePanel';
 import { ElementPalette } from '@/components/editor/ElementPalette';
 import { EditorToolbar } from '@/components/editor/EditorToolbar';
 import { Inspector } from '@/components/editor/Inspector';
@@ -288,6 +289,10 @@ export function EditorClient() {
               ) : null}
             </div>
           )}
+
+          <div className="space-y-2 border-t border-line pt-4">
+            <CandidatePanel />
+          </div>
 
           <div className="space-y-2 border-t border-line pt-4">
             <p className="text-xs text-muted">

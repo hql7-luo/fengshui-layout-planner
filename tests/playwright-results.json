@@ -1,0 +1,185 @@
+[
+  {
+    "viewport": "desktop-1440x900",
+    "steps": [
+      {
+        "name": "打开编辑器页面",
+        "passed": true
+      },
+      {
+        "name": "加载示例: entry-facing-bathroom",
+        "passed": true
+      },
+      {
+        "name": "加载示例: bathroom-in-center",
+        "passed": true
+      },
+      {
+        "name": "加载示例: bed-facing-door",
+        "passed": true
+      },
+      {
+        "name": "回到第一个示例",
+        "passed": true
+      },
+      {
+        "name": "开启全部七个分析图层",
+        "passed": true
+      },
+      {
+        "name": "调整图层透明度",
+        "passed": true
+      },
+      {
+        "name": "点击区域查看依据",
+        "passed": true
+      },
+      {
+        "name": "执行一键结构优化",
+        "passed": true
+      },
+      {
+        "name": "切换方案 A/B/C",
+        "passed": true
+      },
+      {
+        "name": "应用方案",
+        "passed": true
+      },
+      {
+        "name": "撤销方案",
+        "passed": true
+      },
+      {
+        "name": "刷新检查持久化",
+        "passed": true
+      }
+    ],
+    "consoleErrors": [],
+    "pageErrors": [],
+    "requestFailures": [],
+    "screenshotPath": "./tests/screenshots/desktop-1440x900.png"
+  },
+  {
+    "viewport": "tablet-768x1024",
+    "steps": [
+      {
+        "name": "打开编辑器页面",
+        "passed": true
+      },
+      {
+        "name": "加载示例: entry-facing-bathroom",
+        "passed": true
+      },
+      {
+        "name": "加载示例: bathroom-in-center",
+        "passed": true
+      },
+      {
+        "name": "加载示例: bed-facing-door",
+        "passed": true
+      },
+      {
+        "name": "回到第一个示例",
+        "passed": true
+      },
+      {
+        "name": "开启全部七个分析图层",
+        "passed": true
+      },
+      {
+        "name": "调整图层透明度",
+        "passed": true
+      },
+      {
+        "name": "点击区域查看依据",
+        "passed": true
+      },
+      {
+        "name": "执行一键结构优化",
+        "passed": true
+      },
+      {
+        "name": "切换方案 A/B/C",
+        "passed": true
+      },
+      {
+        "name": "应用方案",
+        "passed": true
+      },
+      {
+        "name": "撤销方案",
+        "passed": true
+      },
+      {
+        "name": "刷新检查持久化",
+        "passed": true
+      }
+    ],
+    "consoleErrors": [],
+    "pageErrors": [],
+    "requestFailures": [],
+    "screenshotPath": "./tests/screenshots/tablet-768x1024.png"
+  },
+  {
+    "viewport": "mobile-390x844",
+    "steps": [
+      {
+        "name": "打开编辑器页面",
+        "passed": true
+      },
+      {
+        "name": "加载示例: entry-facing-bathroom",
+        "passed": true
+      },
+      {
+        "name": "加载示例: bathroom-in-center",
+        "passed": true
+      },
+      {
+        "name": "加载示例: bed-facing-door",
+        "passed": true
+      },
+      {
+        "name": "回到第一个示例",
+        "passed": true
+      },
+      {
+        "name": "开启全部七个分析图层",
+        "passed": true
+      },
+      {
+        "name": "调整图层透明度",
+        "passed": true
+      },
+      {
+        "name": "点击区域查看依据",
+        "passed": true
+      },
+      {
+        "name": "执行一键结构优化",
+        "passed": true
+      },
+      {
+        "name": "切换方案 A/B/C",
+        "passed": true
+      },
+      {
+        "name": "应用方案",
+        "passed": true
+      },
+      {
+        "name": "撤销方案",
+        "passed": true
+      },
+      {
+        "name": "刷新检查持久化",
+        "passed": true
+      }
+    ],
+    "consoleErrors": [],
+    "pageErrors": [],
+    "requestFailures": [],
+    "screenshotPath": "./tests/screenshots/mobile-390x844.png"
+  }
+]

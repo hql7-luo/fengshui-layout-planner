@@ -405,6 +405,9 @@ function computeEnergy(input: LayerInput): LayerOutput {
   const roomsEls = rooms(elements);
   const windows = byType(elements, 'window');
   const doors = byType(elements, 'room_door').concat(byType(elements, 'entry_door'));
+  if (roomsEls.length === 0 && doors.length === 0 && windows.length === 0) {
+    return { regions: [], lines: [], sufficient: false, insufficiencyReason: '缺少房间、门窗数据，无法计算能量分布' };
+  }
   const house = { x: W / 2, y: H / 2 };
 
   // 预计算问题元素包围盒
