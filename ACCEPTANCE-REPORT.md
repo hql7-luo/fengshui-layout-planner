@@ -1,7 +1,7 @@
 # FengShui 户型助手 · 最终发布前验收报告
 
 > 验收日期：2026-07-31  
-> 最终 commit：`f72811f`  
+> 最终 commit：`b785426`  
 > 结论：**适合发布 v1.0.0**，但需以「参考工具」定位，并在实际施工前由专业设计师/物业确认。
 
 ---
@@ -118,7 +118,7 @@
 ## 9. 最终 commit hash
 
 ```
-f72811f docs: add final pre-release acceptance report and metrics script
+b785426 docs: add final pre-release acceptance report and metrics script
 ```
 
 ---
