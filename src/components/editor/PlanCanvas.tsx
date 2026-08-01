@@ -16,6 +16,8 @@ import {
 } from 'react-konva';
 import { ELEMENT_SPECS } from '@/lib/element-catalog';
 import { loadImage } from '@/lib/image';
+import type { AllLayers } from '@/lib/analysis-layers';
+import AnalysisLayers from '@/components/editor/AnalysisLayers';
 import type { Issue, PlanElement, Project } from '@/lib/types';
 
 const SEVERITY_COLORS = {
@@ -31,6 +33,7 @@ interface PlanCanvasProps {
   selectedId: string | null;
   showIssues: boolean;
   zoom: number;
+  layers: AllLayers | null;
   onSelect: (id: string | null) => void;
   onChange: (id: string, patch: Partial<PlanElement>) => void;
 }
@@ -67,6 +70,7 @@ export default function PlanCanvas({
   selectedId,
   showIssues,
   zoom,
+  layers,
   onSelect,
   onChange,
 }: PlanCanvasProps) {
@@ -175,6 +179,9 @@ export default function PlanCanvas({
             <Line key={index} points={points} stroke="#eae6dd" strokeWidth={1} />
           ))}
         </Layer>
+
+        {/* 分析图层：置于编辑层之下、listening=false 不拦截拖拽，不遮挡墙体/门窗/家具编辑 */}
+        <AnalysisLayers layers={layers} />
 
         <Layer>
           {elements

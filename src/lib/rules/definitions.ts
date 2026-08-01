@@ -1,12 +1,14 @@
 import {
   backMidpoint,
   bboxCenter,
+  center,
   compassOf,
   containsPoint,
   distance,
   distanceToBoundary,
   elementGap,
   facingCheck,
+  lineBlocked,
   mutuallyFacing,
   normalize,
   roundTo,
@@ -156,6 +158,7 @@ export const RULES: RuleDefinition[] = [
     maxOccurrences: 1,
     evaluate: (ctx) => {
       const hits: RuleHit[] = [];
+      const barriers = ctx.byType('screen');
       const entries = ctx.byType('entry_door');
       const bathrooms = ctx.byType('bathroom');
       const maxDistance = ctx.toPixels(8);
@@ -168,6 +171,8 @@ export const RULES: RuleDefinition[] = [
           );
           if (direct.facing || viaDoor) {
             const target = viaDoor ?? bath;
+            // 玄关柜 / 屏风 / 短隔墙已阻断直视轴线，则不再计为问题
+            if (lineBlocked(center(entry), center(target), barriers)) continue;
             hits.push({
               elementIds: [entry.id, target.id],
               marker: markerOf(entry, target),
@@ -198,6 +203,7 @@ export const RULES: RuleDefinition[] = [
     maxOccurrences: 2,
     evaluate: (ctx) => {
       const hits: RuleHit[] = [];
+      const barriers = ctx.byType('screen');
       const entries = ctx.byType('entry_door');
       const maxDistance = ctx.toPixels(9);
       const bedroomDoors = ctx.byType('room_door').filter((door) => {
@@ -207,6 +213,7 @@ export const RULES: RuleDefinition[] = [
       for (const entry of entries) {
         for (const door of bedroomDoors) {
           if (facingCheck(entry, door, { maxAngle: 24, maxDistance }).facing) {
+            if (lineBlocked(center(entry), center(door), barriers)) continue;
             hits.push({
               elementIds: [entry.id, door.id],
               marker: markerOf(entry, door),
@@ -236,6 +243,7 @@ export const RULES: RuleDefinition[] = [
     maxOccurrences: 3,
     evaluate: (ctx) => {
       const hits: RuleHit[] = [];
+      const barriers = ctx.byType('screen');
       const list = ctx.byType('room_door');
       const maxDistance = ctx.toPixels(5);
       for (let i = 0; i < list.length; i += 1) {
@@ -244,6 +252,7 @@ export const RULES: RuleDefinition[] = [
           const b = list[j];
           if (ctx.roomOf(a)?.id && ctx.roomOf(a)?.id === ctx.roomOf(b)?.id) continue;
           if (mutuallyFacing(a, b, { maxAngle: 25, maxDistance })) {
+            if (lineBlocked(center(a), center(b), barriers)) continue;
             hits.push({
               elementIds: [a.id, b.id],
               marker: markerOf(a, b),
@@ -655,6 +664,7 @@ export const RULES: RuleDefinition[] = [
     maxOccurrences: 2,
     evaluate: (ctx) => {
       const hits: RuleHit[] = [];
+      const barriers = ctx.byType('screen');
       const entries = ctx.byType('entry_door');
       const targets = [...ctx.byType('window'), ...ctx.byType('balcony')];
       const minDistance = ctx.toPixels(3);
@@ -666,6 +676,7 @@ export const RULES: RuleDefinition[] = [
             const back = facingCheck(target, entry, { maxAngle: 25 });
             if (!back.facing) continue;
           }
+          if (lineBlocked(center(entry), center(target), barriers)) continue;
           hits.push({
             elementIds: [entry.id, target.id],
             marker: markerOf(entry, target),

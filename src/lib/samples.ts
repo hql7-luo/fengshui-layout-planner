@@ -1,4 +1,5 @@
 import { ELEMENT_SPECS } from './element-catalog';
+import { buildStructureFromElements } from './optimizer';
 import type { ElementType, PlanElement, Project } from './types';
 
 /** 示例户型统一使用的比例尺与画布 */
@@ -189,6 +190,7 @@ export function createProjectFromSample(id: string, timestamp = Date.now()): Pro
       before: { elements },
       after: { elements: elements.map((el) => ({ ...el })) },
     },
+    structure: buildStructureFromElements(elements, true, SAMPLE_PIXELS_PER_METER),
     sampleId: sample.id,
   };
 }
