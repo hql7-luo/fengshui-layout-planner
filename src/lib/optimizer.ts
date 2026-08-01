@@ -234,19 +234,29 @@ function applyElements(base: PlanElement[], mods: PlanModification[]): PlanEleme
 
 function applyStructure(structure: StructureModel, mods: PlanModification[]): StructureModel {
   const next = cloneStructure(structure);
+  // 收集所有被封堵的门洞 ID
+  const sealedIds = new Set<string>();
   for (const mod of mods) {
     if (mod.sealedDoorIds) {
+      for (const sid of mod.sealedDoorIds) sealedIds.add(sid);
       next.doors = next.doors.filter((d) => !mod.sealedDoorIds!.includes(d.id));
     }
     if (mod.addedWalls) next.walls = [...next.walls, ...mod.addedWalls.map((w) => ({ ...w }))];
   }
-  // 同步门洞元素移位到结构模型
+  // 同步门洞元素移位到结构模型；被封堵的门用新 ID 创建（旧门洞已封闭）
   for (const mod of mods) {
     if (mod.movedElementIds) {
       for (const mv of mod.movedElementIds) {
-        const opening = next.doors.find((d) => d.linkedElementId === mv.id);
-        if (opening) opening.point = { x: mv.x, y: mv.y };
-        else next.doors.push({ id: `do-${mv.id}`, wallId: 'inner', point: { x: mv.x, y: mv.y }, widthM: 0.9, kind: 'room', linkedElementId: mv.id, movable: true });
+        const oldDoorId = `do-${mv.id}`;
+        const wasSealed = sealedIds.has(oldDoorId);
+        if (wasSealed) {
+          // 旧门洞已封堵，在新位置创建新门洞
+          next.doors.push({ id: `${oldDoorId}-relocated`, wallId: 'inner', point: { x: mv.x, y: mv.y }, widthM: 0.9, kind: 'room', linkedElementId: mv.id, movable: true });
+        } else {
+          const opening = next.doors.find((d) => d.linkedElementId === mv.id);
+          if (opening) opening.point = { x: mv.x, y: mv.y };
+          else next.doors.push({ id: oldDoorId, wallId: 'inner', point: { x: mv.x, y: mv.y }, widthM: 0.9, kind: 'room', linkedElementId: mv.id, movable: true });
+        }
       }
     }
   }
@@ -378,7 +388,21 @@ function buildPlan(
     );
   }
 
-  if (ctx.conceptOnly) finalRisks.unshift('未标记承重墙，本方案为概念候选，不可直接施工');
+  // 门洞移位风险提示：新位置须现场确认在墙体上，旧门洞须封堵恢复
+  const hasDoorRelocation = mods.some((mm) => mm.kind === 'relocate-door' || mm.kind === 'offset-door');
+  if (hasDoorRelocation) {
+    finalRisks.push(
+      '门洞移位为新位置需经现场确认其在非承重墙体上，且新门洞尺寸不超过所在墙段；' +
+        '旧门洞需用同材质墙体封堵恢复完整性，不得留有空洞。需建筑师或结构设计师复核。',
+    );
+  }
+  // 新增隔断 / 屏风提示
+  const hasPartition = mods.some((mm) => mm.kind === 'add-screen' || mm.kind === 'add-partition' || mm.kind === 'add-node');
+  if (hasPartition) {
+    finalRisks.push('新增隔断 / 屏风为非承重构件，安装前需确认楼板承载及管线避让，建议由物业确认施工许可。');
+  }
+
+  if (ctx.conceptOnly) finalRisks.unshift('未标记承重墙，本方案为概念候选，不可直接施工；需建筑师、结构设计师或物业确认后方可实施');
 
   return {
     id,

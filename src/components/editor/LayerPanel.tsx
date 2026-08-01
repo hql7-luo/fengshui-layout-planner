@@ -10,14 +10,22 @@ interface LayerPanelProps {
 }
 
 /** 订阅 matchMedia，判断是否为移动端（useSyncExternalStore 避免在 effect 中 setState） */
+let _mobileQuery: MediaQueryList | null = null;
+function getMobileQuery(): MediaQueryList | null {
+  if (typeof window === 'undefined') return null;
+  if (!_mobileQuery) _mobileQuery = window.matchMedia('(max-width: 768px)');
+  return _mobileQuery;
+}
+
 function useIsMobile(): boolean {
   return useSyncExternalStore(
     (onChange) => {
-      const mq = window.matchMedia('(max-width: 768px)');
+      const mq = getMobileQuery();
+      if (!mq) return () => {};
       mq.addEventListener('change', onChange);
       return () => mq.removeEventListener('change', onChange);
     },
-    () => window.matchMedia('(max-width: 768px)').matches,
+    () => getMobileQuery()?.matches ?? false,
     () => false,
   );
 }
@@ -64,6 +72,7 @@ export default function LayerPanel({ layers }: LayerPanelProps) {
           max={100}
           value={Math.round(layerOpacity * 100)}
           onChange={(e) => setLayerOpacity(Number(e.target.value) / 100)}
+          aria-label="图层透明度"
           className="w-full"
         />
       </div>
