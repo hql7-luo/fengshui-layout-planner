@@ -1,7 +1,7 @@
 # FengShui Layout Planner · v1.0.0 发布前最终验收报告
 
 > 独立复核日期：2026-08-07
-> 项目路径：`.`
+> 项目路径：仓库根目录
 > 开始分支：`main`
 > 本轮开始 commit：`d7cf1a9ab81bd2bb5dde6aa86f15db796bad097b`
 > 产品定位：**传统居住文化与现代空间布局参考工具**
@@ -129,6 +129,5 @@ Playwright 视口：1440×900、768×1024、390×844。
 - `tests/e2e/editor.spec.ts`
 - `tests/screenshots/*-wall-preview.png`
 - `tests/screenshots/*-final.png`
-- `tests/playwright-results.json`
 
 最终本地 commit hash 以包含本报告的 `git log -1` 为准；Git commit 无法在自身内容中可靠自引用自身 hash。

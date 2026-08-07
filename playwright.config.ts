@@ -6,10 +6,8 @@ export default defineConfig({
   expect: { timeout: 10_000 },
   fullyParallel: false,
   workers: 1,
-  reporter: [
-    ['list'],
-    ['json', { outputFile: 'tests/playwright-results.json' }],
-  ],
+  // 只输出不包含本机绝对路径的终端结果；失败证据由 trace / screenshot 保存在已忽略目录。
+  reporter: [['list']],
   use: {
     baseURL: 'http://127.0.0.1:3107',
     headless: true,

@@ -14,6 +14,10 @@
 /coverage
 /test-results
 /playwright-report
+/tests/playwright-results.json
+/.playwright
+/ms-playwright
+/.cache/ms-playwright
 /tests/screenshots/*
 !/tests/screenshots/*-final.png
 !/tests/screenshots/*-wall-preview.png
