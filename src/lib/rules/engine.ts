@@ -75,7 +75,7 @@ export function analyzePlan(
     categories[key] = Math.max(0, Math.min(100, Math.round(categories[key])));
   }
 
-  const overall = Math.round(
+  const rawOverall = Math.round(
     SCORE_CATEGORIES.reduce((sum, key) => sum + categories[key] * CATEGORY_WEIGHTS[key], 0),
   );
 
@@ -91,26 +91,34 @@ export function analyzePlan(
 
   // 严重问题硬上限：存在任意 high 问题时总分不高于 89；
   // 存在两个及以上结构性 medium 问题时总分不高于 92。
-  let cappedOverall = overall;
-  if (counts.high >= 1) cappedOverall = Math.min(cappedOverall, SCORE_CAP_HIGH);
+  let cappedOverall = rawOverall;
+  let scoreCap: AnalysisResult['scoreCap'];
+  if (counts.high >= 1) {
+    cappedOverall = Math.min(cappedOverall, SCORE_CAP_HIGH);
+    scoreCap = {
+      value: SCORE_CAP_HIGH,
+      reason: `仍存在 ${counts.high} 项高风险问题，综合分最高为 ${SCORE_CAP_HIGH} 分。`,
+    };
+  }
   const structuralMedium = issues.filter(
     (i) => i.severity === 'medium' && STRUCTURAL_RULE_IDS.has(i.ruleId),
   ).length;
-  if (structuralMedium >= 2) cappedOverall = Math.min(cappedOverall, SCORE_CAP_STRUCTURAL_MEDIUM);
-  if (cappedOverall !== overall) {
-    // 按比例把扣减分配到五维，保持各维与总分一致，避免误导
-    const scale = cappedOverall / Math.max(1, overall);
-    for (const key of SCORE_CATEGORIES) {
-      categories[key] = Math.round(Math.max(0, Math.min(100, categories[key] * scale)));
-    }
+  if (counts.high === 0 && structuralMedium >= 2) {
+    cappedOverall = Math.min(cappedOverall, SCORE_CAP_STRUCTURAL_MEDIUM);
+    scoreCap = {
+      value: SCORE_CAP_STRUCTURAL_MEDIUM,
+      reason: `仍存在 ${structuralMedium} 项结构性中风险问题，综合分最高为 ${SCORE_CAP_STRUCTURAL_MEDIUM} 分。`,
+    };
   }
 
   return {
+    rawOverall,
     overall: cappedOverall,
     categories,
     issues,
     counts,
     elementCount: elements.length,
+    scoreCap,
   };
 }
 

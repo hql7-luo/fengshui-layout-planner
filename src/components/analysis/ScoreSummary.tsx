@@ -93,3 +93,13 @@ export function IssueCounts({ result }: { result: AnalysisResult }) {
     </ul>
   );
 }
+
+export function ScoreCapNotice({ result }: { result: AnalysisResult }) {
+  if (!result.scoreCap) return null;
+  return (
+    <p className="rounded-lg border border-ochre/30 bg-ochre-soft/60 px-3 py-2 text-xs leading-relaxed text-ink-soft">
+      {result.scoreCap.reason}
+      {result.rawOverall > result.overall ? ` 五维原始等权分为 ${result.rawOverall} 分。` : ''}
+    </p>
+  );
+}

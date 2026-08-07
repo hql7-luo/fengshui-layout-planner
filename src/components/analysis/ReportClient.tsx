@@ -4,7 +4,7 @@ import Link from 'next/link';
 import { useMemo, useState } from 'react';
 import { IssueList } from '@/components/analysis/IssueList';
 import { PlanPreview } from '@/components/analysis/PlanPreview';
-import { CategoryBars, IssueCounts, ScoreRing } from '@/components/analysis/ScoreSummary';
+import { CategoryBars, IssueCounts, ScoreCapNotice, ScoreRing } from '@/components/analysis/ScoreSummary';
 import { useAnalysis } from '@/hooks/use-analysis';
 import { useHydrated } from '@/hooks/use-hydrated';
 import { DISCLAIMER_TEXT, PRODUCT_NAME_ZH } from '@/lib/constants';
@@ -107,7 +107,10 @@ export function ReportClient() {
             <button
               key={key}
               type="button"
-              onClick={() => setPrimary(key)}
+              onClick={() => {
+                setPrimary(key);
+                setScenario(key);
+              }}
               className={`rounded-md px-3 py-1 text-xs font-medium transition ${
                 primary === key ? 'bg-white text-ink shadow-sm' : 'text-muted hover:text-ink'
               }`}
@@ -177,6 +180,7 @@ export function ReportClient() {
           <div className="space-y-4">
             <IssueCounts result={primaryResult} />
             <CategoryBars result={primaryResult} compare={compare} />
+            <ScoreCapNotice result={primaryResult} />
           </div>
         </section>
 

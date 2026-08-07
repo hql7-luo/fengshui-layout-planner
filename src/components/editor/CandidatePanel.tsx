@@ -1,6 +1,7 @@
 'use client';
 
 import { useProjectStore } from '@/store/project-store';
+import { CATEGORY_LABELS, SCORE_CATEGORIES } from '@/lib/scoring';
 
 export function CandidatePanel() {
   const candidates = useProjectStore((s) => s.candidates);
@@ -15,7 +16,7 @@ export function CandidatePanel() {
       <div className="rounded-lg border border-line bg-white p-3 text-sm">
         <h3 className="mb-2 font-semibold text-ink">结构优化方案</h3>
         <p className="mb-3 text-xs text-muted">
-          基于当前户型生成 A/B/C 三套候选方案：最小改动、综合平衡、评分最高。
+          基于当前户型生成 A/B/C 候选：最小改动、综合平衡、结构综合调整。结构候选只做可校验的门洞沿墙移位与玄关 / 隔断，不自动移动房间、外墙或承重墙。
         </p>
         <button
           type="button"
@@ -29,6 +30,12 @@ export function CandidatePanel() {
   }
 
   const activePlan = candidates.plans.find((p) => p.id === previewPlanId) ?? candidates.plans[0];
+  const activeIndex = candidates.plans.findIndex((plan) => plan.id === activePlan?.id);
+  const duplicateOf = activePlan
+    ? candidates.plans.slice(0, activeIndex).find((plan) =>
+        JSON.stringify(plan.modifications) === JSON.stringify(activePlan.modifications),
+      )
+    : undefined;
 
   return (
     <div className="rounded-lg border border-line bg-white p-3 text-sm">
@@ -45,6 +52,8 @@ export function CandidatePanel() {
             key={plan.id}
             type="button"
             onClick={() => setPreviewPlan(plan.id)}
+            aria-pressed={activePlan?.id === plan.id}
+            data-testid={`candidate-${plan.id}`}
             className={
               'rounded border px-2 py-1.5 text-xs font-medium transition ' +
               (previewPlanId === plan.id || (!previewPlanId && plan.id === 'A')
@@ -61,7 +70,9 @@ export function CandidatePanel() {
       {activePlan && (
         <div className="space-y-2 text-xs">
           <p className="font-medium text-ink">{activePlan.title}</p>
-          {activePlan.conceptOnly && (
+              {activePlan.conceptOnly && activePlan.modifications.some((modification) =>
+                modification.kind !== 'furniture-fix'
+              ) && (
             <p className="rounded bg-amber-50 px-2 py-1 text-amber-700">
               未标记承重墙，本方案为概念候选，不可直接施工。
             </p>
@@ -72,18 +83,43 @@ export function CandidatePanel() {
             <>
               <p className="text-muted">
                 预测评分 {activePlan.predictedScore}（原 {activePlan.originalScore}）· 解决{' '}
-                {activePlan.solvedIssueKeys.length} 项问题
+                {activePlan.solvedIssues.length} 项 · 新增 {activePlan.introducedIssues.length} 项
               </p>
+              <p className="rounded bg-jade-soft/60 px-2 py-1 text-jade-deep">
+                画布正在预览：红色叉号为封闭旧门洞，虚线箭头为移位，新隔断以绿色实线显示。
+              </p>
+              {duplicateOf ? (
+                <p className="rounded bg-paper-deep px-2 py-1 text-muted">
+                  当前约束下与方案 {duplicateOf.id} 的安全改动相同；系统未为凑足差异制造额外改动。
+                </p>
+              ) : null}
               {activePlan.modifications.length > 0 && (
                 <ul className="space-y-1 text-muted">
                   {activePlan.modifications.map((m, i) => (
                     <li key={i} className="flex gap-1.5">
                       <span className="text-jade">•</span>
-                      <span>{m.label}</span>
+                      <span><strong className="font-medium text-ink-soft">{m.label}：</strong>{m.description}</span>
                     </li>
                   ))}
                 </ul>
               )}
+              {activePlan.solvedIssues.length > 0 ? (
+                <p className="text-jade-deep">解决：{activePlan.solvedIssues.map((issue) => issue.name).join('、')}</p>
+              ) : null}
+              {activePlan.introducedIssues.length > 0 ? (
+                <p className="text-clay">新增：{activePlan.introducedIssues.map((issue) => issue.name).join('、')}</p>
+              ) : null}
+              <details>
+                <summary className="cursor-pointer text-muted">查看五维评分变化</summary>
+                <ul className="mt-1 grid grid-cols-2 gap-x-3 gap-y-1 text-muted">
+                  {SCORE_CATEGORIES.map((category) => (
+                    <li key={category} className="flex justify-between gap-2">
+                      <span>{CATEGORY_LABELS[category]}</span>
+                      <span className="tabular-nums">{activePlan.predictedCategories[category]}</span>
+                    </li>
+                  ))}
+                </ul>
+              </details>
               {activePlan.risks.length > 0 && (
                 <div className="rounded border border-clay/25 bg-clay-soft/50 px-2 py-1.5">
                   <p className="mb-1 font-medium text-clay">风险提示</p>
@@ -104,6 +140,7 @@ export function CandidatePanel() {
           type="button"
           onClick={() => applyCandidate(activePlan?.id ?? 'A')}
           disabled={!activePlan?.feasible}
+          data-testid="apply-candidate"
           className="flex-1 rounded-lg bg-jade px-3 py-2 text-sm font-medium text-white transition hover:bg-jade-deep disabled:opacity-40"
         >
           应用方案

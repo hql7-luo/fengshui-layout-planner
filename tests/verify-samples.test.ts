@@ -10,7 +10,6 @@ import {
   entrySeesBedroom,
   openLivingDining,
   complexPerformancePlan,
-  VERIFY_SAMPLES,
 } from '@/lib/verify-samples';
 import type { PlanElement } from '@/lib/types';
 
@@ -76,11 +75,8 @@ describe('五个真实户型验证', () => {
 
       it('优化后不产生新问题（或新问题数量 ≤ 解决的问题数）', () => {
         for (const plan of opt.plans.filter((p) => p.feasible)) {
-          const recomputed = analyzePlan(plan.projectedElements, OPTIONS);
-          const newIssues = recomputed.issues.filter((ri) => !analysis.issues.some((oi) => oi.key === ri.key));
-          const solvedIssues = analysis.issues.filter((oi) => !recomputed.issues.some((ri) => ri.key === oi.key));
-          // 允许少量新问题，但解决数应 ≥ 新增数
-          expect(solvedIssues.length).toBeGreaterThanOrEqual(newIssues.length);
+          expect(plan.introducedIssues.some((issue) => issue.severity === 'high')).toBe(false);
+          expect(plan.solvedIssues.length).toBeGreaterThanOrEqual(plan.introducedIssues.length);
         }
       });
 

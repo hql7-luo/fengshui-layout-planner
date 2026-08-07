@@ -18,7 +18,7 @@ import { ELEMENT_SPECS } from '@/lib/element-catalog';
 import { loadImage } from '@/lib/image';
 import type { AllLayers } from '@/lib/analysis-layers';
 import AnalysisLayers from '@/components/editor/AnalysisLayers';
-import type { Issue, PlanElement, Project } from '@/lib/types';
+import type { CandidatePlan, Issue, PlanElement, Project, StructureModel } from '@/lib/types';
 
 const SEVERITY_COLORS = {
   high: '#b8523f',
@@ -34,6 +34,8 @@ interface PlanCanvasProps {
   showIssues: boolean;
   zoom: number;
   layers: AllLayers | null;
+  previewPlan: CandidatePlan | null;
+  structure?: StructureModel;
   onSelect: (id: string | null) => void;
   onChange: (id: string, patch: Partial<PlanElement>) => void;
 }
@@ -71,6 +73,8 @@ export default function PlanCanvas({
   showIssues,
   zoom,
   layers,
+  previewPlan,
+  structure,
   onSelect,
   onChange,
 }: PlanCanvasProps) {
@@ -143,7 +147,7 @@ export default function PlanCanvas({
   );
 
   return (
-    <div ref={containerRef} className="thin-scroll h-full w-full overflow-auto p-3">
+    <div ref={containerRef} data-testid="plan-canvas" className="thin-scroll h-full w-full overflow-auto p-3">
       <Stage
         width={project.canvas.width * scale}
         height={project.canvas.height * scale}
@@ -178,10 +182,17 @@ export default function PlanCanvas({
           {gridLines.map((points, index) => (
             <Line key={index} points={points} stroke="#eae6dd" strokeWidth={1} />
           ))}
+          <NorthMarker
+            x={project.canvas.width - 54}
+            y={54}
+            angle={project.northAngle}
+          />
         </Layer>
 
         {/* 分析图层：置于编辑层之下、listening=false 不拦截拖拽，不遮挡墙体/门窗/家具编辑 */}
         <AnalysisLayers layers={layers} />
+
+        <CandidatePreviewLayer plan={previewPlan} elements={elements} structure={structure} />
 
         <Layer>
           {elements
@@ -260,16 +271,81 @@ export default function PlanCanvas({
             ))}
           </Layer>
         ) : null}
-
-        <Layer listening={false}>
-          <NorthMarker
-            x={project.canvas.width - 54}
-            y={54}
-            angle={project.northAngle}
-          />
-        </Layer>
       </Stage>
     </div>
+  );
+}
+
+function CandidatePreviewLayer({
+  plan,
+  elements,
+  structure,
+}: {
+  plan: CandidatePlan | null;
+  elements: PlanElement[];
+  structure?: StructureModel;
+}) {
+  if (!plan || !plan.feasible) return null;
+  const modifications = plan.modifications;
+  const addedWalls = modifications.flatMap((modification) => modification.addedWalls ?? []);
+  const addedElements = modifications.flatMap((modification) => modification.addedElements ?? []);
+  const moves = modifications.flatMap((modification) => modification.movedElementIds ?? []);
+  const sealedIds = new Set(modifications.flatMap((modification) => modification.sealedDoorIds ?? []));
+  const sealedDoors = (structure?.doors ?? []).filter((door) => sealedIds.has(door.id));
+
+  return (
+    <Layer listening={false} opacity={0.9}>
+      {sealedDoors.map((door) => (
+        <Group key={`sealed-${door.id}`} x={door.point.x} y={door.point.y}>
+          <Line points={[-10, -10, 10, 10]} stroke="#b8523f" strokeWidth={3} />
+          <Line points={[-10, 10, 10, -10]} stroke="#b8523f" strokeWidth={3} />
+          <Text text="封闭旧门洞" x={12} y={-8} fontSize={11} fill="#b8523f" />
+        </Group>
+      ))}
+      {moves.map((move) => {
+        const original = elements.find((element) => element.id === move.id);
+        if (!original) return null;
+        return (
+          <Group key={`move-${move.id}`}>
+            <Arrow
+              points={[original.x, original.y, move.x, move.y]}
+              stroke="#2f5d50"
+              fill="#2f5d50"
+              strokeWidth={2.5}
+              dash={[7, 4]}
+              pointerLength={8}
+              pointerWidth={8}
+            />
+            <Circle x={move.x} y={move.y} radius={8} stroke="#2f5d50" strokeWidth={2} fill="#e7eeea" />
+          </Group>
+        );
+      })}
+      {addedWalls.map((wall) => (
+        <Line
+          key={wall.id}
+          points={[wall.x1, wall.y1, wall.x2, wall.y2]}
+          stroke="#2f5d50"
+          strokeWidth={Math.max(4, wall.thicknessM * 20)}
+          lineCap="round"
+        />
+      ))}
+      {addedElements.map((element) => (
+        <Rect
+          key={`ghost-${element.id}`}
+          x={element.x}
+          y={element.y}
+          width={element.width}
+          height={element.height}
+          offsetX={element.width / 2}
+          offsetY={element.height / 2}
+          rotation={element.rotation}
+          fill="#e7eeea"
+          stroke="#2f5d50"
+          strokeWidth={2}
+          dash={[6, 4]}
+        />
+      ))}
+    </Layer>
   );
 }
 

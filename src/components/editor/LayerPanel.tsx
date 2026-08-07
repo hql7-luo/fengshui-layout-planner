@@ -12,7 +12,7 @@ interface LayerPanelProps {
 /** 订阅 matchMedia，判断是否为移动端（useSyncExternalStore 避免在 effect 中 setState） */
 let _mobileQuery: MediaQueryList | null = null;
 function getMobileQuery(): MediaQueryList | null {
-  if (typeof window === 'undefined') return null;
+  if (typeof window === 'undefined' || typeof window.matchMedia !== 'function') return null;
   if (!_mobileQuery) _mobileQuery = window.matchMedia('(max-width: 768px)');
   return _mobileQuery;
 }
@@ -45,7 +45,7 @@ export default function LayerPanel({ layers }: LayerPanelProps) {
   const effectiveExpanded = manuallySet ? expanded : !isMobile;
   const toggleExpanded = () => {
     setManuallySet(true);
-    setExpanded((v) => !v);
+    setExpanded(!effectiveExpanded);
   };
 
   return (
@@ -54,6 +54,7 @@ export default function LayerPanel({ layers }: LayerPanelProps) {
         <h3 className="font-semibold text-ink">分析图层</h3>
         <button
           type="button"
+          aria-expanded={effectiveExpanded}
           className="rounded border border-line px-2 py-0.5 text-xs text-muted"
           onClick={toggleExpanded}
         >
@@ -112,21 +113,23 @@ export default function LayerPanel({ layers }: LayerPanelProps) {
                       </span>
                     ))}
                   </div>
-                  {out.regions.length > 0 && (
+                  {out.regions.length + out.lines.filter((line) => line.basis).length > 0 && (
                     <details className="text-xs">
-                      <summary className="cursor-pointer text-muted">查看区域依据（{out.regions.length}）</summary>
+                      <summary className="cursor-pointer text-muted">
+                        查看计算依据（{out.regions.length + out.lines.filter((line) => line.basis).length}）
+                      </summary>
                       <ul className="mt-1 max-h-40 space-y-1 overflow-auto">
-                        {out.regions.slice(0, 40).map((r) => (
-                          <li key={r.id}>
+                        {[...out.regions, ...out.lines.filter((line) => line.basis)].slice(0, 40).map((item) => (
+                          <li key={item.id}>
                             <button
                               type="button"
                               className={
                                 'block w-full rounded px-1 py-0.5 text-left hover:bg-line ' +
-                                (selectedRegion?.id === r.id ? ' bg-line font-medium' : '')
+                                (selectedRegion?.id === item.id ? ' bg-line font-medium' : '')
                               }
-                              onClick={() => selectRegion(r)}
+                              onClick={() => selectRegion(item)}
                             >
-                              {r.label}
+                              {item.label ?? '路径依据'}
                             </button>
                           </li>
                         ))}

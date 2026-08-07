@@ -40,32 +40,47 @@ for (const sample of samples) {
     console.log(`  解决问题: ${bestPlan.solvedIssueKeys.length} 项`);
     console.log(`  改动项: ${bestPlan.modifications.map((m) => m.label).join('、') || '无'}`);
   } else {
-    console.log('  无可行结构优化方案（仅家具自动优化）');
+    console.log('  无可行结构优化方案');
+    console.log(`  约束原因: ${[...new Set(opt.plans.map((plan) => plan.infeasibleReason).filter(Boolean))].join('；')}`);
   }
 }
 
 console.log('\n=== 性能测试结果 ===');
 const complex = complexPerformancePlan();
+const complexAnalysis = analyzePlan(complex, LARGE_OPTIONS);
 
-const t0 = performance.now();
-const analysis = analyzePlan(complex, LARGE_OPTIONS);
-const analysisTime = performance.now() - t0;
-console.log(`分析计算: ${analysisTime.toFixed(1)}ms (问题 ${analysis.issues.length} 项)`);
+function medianMs(run: () => void, iterations: number): number {
+  for (let index = 0; index < 3; index += 1) run();
+  const samples: number[] = [];
+  for (let index = 0; index < iterations; index += 1) {
+    const started = performance.now();
+    run();
+    samples.push(performance.now() - started);
+  }
+  samples.sort((a, b) => a - b);
+  return samples[Math.floor(samples.length / 2)];
+}
 
-const t1 = performance.now();
-const layers = computeLayers({
-  elements: complex,
-  analysis,
-  options: LARGE_OPTIONS,
-});
-const layersTime = performance.now() - t1;
-console.log(`7 图层计算: ${layersTime.toFixed(1)}ms`);
+const analysisTime = medianMs(() => {
+  analyzePlan(complex, LARGE_OPTIONS);
+}, 50);
+console.log(`分析计算中位数: ${analysisTime.toFixed(2)}ms (问题 ${complexAnalysis.issues.length} 项, 50 次)`);
 
-const t2 = performance.now();
-const opt = generateCandidatePlans({
-  elements: complex,
-  structure: buildStructureFromElements(complex, true, PPM),
-  options: LARGE_OPTIONS,
-});
-const optTime = performance.now() - t2;
-console.log(`优化器计算: ${optTime.toFixed(1)}ms`);
+const layersTime = medianMs(() => {
+  computeLayers({
+    elements: complex,
+    analysis: complexAnalysis,
+    options: LARGE_OPTIONS,
+  });
+}, 30);
+console.log(`7 图层计算中位数: ${layersTime.toFixed(2)}ms (30 次)`);
+
+const complexStructure = buildStructureFromElements(complex, true, PPM);
+const optTime = medianMs(() => {
+  generateCandidatePlans({
+    elements: complex,
+    structure: complexStructure,
+    options: LARGE_OPTIONS,
+  });
+}, 20);
+console.log(`优化器计算中位数: ${optTime.toFixed(2)}ms (20 次)`);

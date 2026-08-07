@@ -84,7 +84,6 @@ describe('评分上限逻辑 · 不因可优化性影响原始评分', () => {
 
   it('优化器在可优化场景下能解决问题并提升分数', () => {
     const els = buildScenario(2.4, 2.2);
-    const base = analyzePlan(els, OPTIONS);
     const res = generateCandidatePlans({ elements: els, structure: buildStructureFromElements(els, true, PPM), options: OPTIONS });
     const feasible = res.plans.filter((p) => p.feasible);
     expect(feasible.length).toBeGreaterThan(0);

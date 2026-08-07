@@ -189,12 +189,19 @@ export interface Issue {
 }
 
 export interface AnalysisResult {
+  /** 未应用严重问题上限前，五维等权计算得到的原始总分 */
+  rawOverall: number;
   overall: number;
   categories: Record<ScoreCategory, number>;
   issues: Issue[];
   counts: Record<Severity, number>;
   /** 参与评估的元素数量，便于提示用户信息是否充足 */
   elementCount: number;
+  /** 严重问题触发总分上限时，保留可追溯的上限依据 */
+  scoreCap?: {
+    value: number;
+    reason: string;
+  };
 }
 
 /* ------------------------------------------------------------------ */
@@ -302,7 +309,7 @@ export type ProblemType =
   | 'furniture'
   | 'mixed';
 
-/** 单条结构优化候选方案（A=最小改动 / B=综合平衡 / C=评分最高） */
+/** 单条结构优化候选方案（A=最小改动 / B=综合平衡 / C=结构综合调整） */
 export interface CandidatePlan {
   id: 'A' | 'B' | 'C';
   title: string;
@@ -320,6 +327,10 @@ export interface CandidatePlan {
   predictedCategories: Record<ScoreCategory, number>;
   solvedIssueKeys: string[];
   remainingIssueKeys: string[];
+  /** 相对原方案真正消除的问题（按规则 + 涉及元素稳定比对，避免序号漂移） */
+  solvedIssues: Array<Pick<Issue, 'key' | 'ruleId' | 'name' | 'severity'>>;
+  /** 候选方案新增的问题；用于防止以制造新风险换取分数 */
+  introducedIssues: Array<Pick<Issue, 'key' | 'ruleId' | 'name' | 'severity'>>;
   /** 优化价值 = 解决问题扣分 − 改动成本 − 约束惩罚 */
   valueScore: number;
   changeDegree: ChangeDegree;
@@ -333,6 +344,10 @@ export interface OptimizationResult {
   /** 是否存在可生成结构方案的问题 */
   hasStructuralIssue: boolean;
   generatedAt: number;
+  /** Store 写入的来源信息，用于刷新恢复与防止应用陈旧候选 */
+  sourceProjectId?: string;
+  sourceScenario?: ScenarioKey;
+  sourceUpdatedAt?: number;
 }
 
 /* ------------------------------------------------------------------ */

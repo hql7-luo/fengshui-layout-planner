@@ -57,6 +57,7 @@ export function EditorToolbar({
             key={key}
             type="button"
             onClick={() => onScenario(key)}
+            aria-pressed={scenario === key}
             className={`rounded-md px-3 py-1 text-xs font-medium transition ${
               scenario === key ? 'bg-white text-ink shadow-sm' : 'text-muted hover:text-ink'
             }`}
@@ -106,6 +107,7 @@ export function EditorToolbar({
             step={0.1}
             value={zoom}
             onChange={(e) => onZoom(Number(e.target.value))}
+            aria-label="画布缩放"
             className="w-20 accent-jade"
           />
           <span className="w-9 tabular-nums text-muted">{Math.round(zoom * 100)}%</span>

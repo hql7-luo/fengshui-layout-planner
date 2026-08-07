@@ -1,4 +1,5 @@
 import { normalizeDeg } from './geometry';
+import { issueIdentity } from './issue-diff';
 import { analyzePlan, type ContextOptions } from './rules/engine';
 import { describeFix } from './fix-summary';
 import type { ApplyAllItem, PlanElement } from './types';
@@ -23,6 +24,7 @@ export function applyAllFixesToElements(
   const original = analyzePlan(elements, options);
   let working: PlanElement[] = elements.map((e) => ({ ...e }));
   const items: ApplyAllItem[] = [];
+  const resolved = new Set<string>();
 
   for (const issue of original.issues) {
     if (!issue.fix) {
@@ -31,7 +33,7 @@ export function applyAllFixesToElements(
         ruleName: issue.name,
         severity: issue.severity,
         status: 'skipped',
-        change: '涉及墙体或房间位置，需手动调整布局',
+        change: manualReason(issue.ruleId),
       });
       continue;
     }
@@ -61,7 +63,32 @@ export function applyAllFixesToElements(
       y: target.y + (fresh.fix.dy ?? 0) * pixelsPerMeter,
       rotation: normalizeDeg(target.rotation + (fresh.fix.rotationDelta ?? 0)),
     };
-    working = working.map((e, i) => (i === idx ? next : e));
+    const candidate = working.map((e, i) => (i === idx ? next : e));
+    const candidateResult = analyzePlan(candidate, options);
+    const candidateIdentities = new Set(candidateResult.issues.map(issueIdentity));
+    const targetIdentity = issueIdentity(fresh);
+    const reintroduced = [...resolved].some((identity) => candidateIdentities.has(identity));
+    const madeWorse =
+      candidateResult.counts.high > current.counts.high ||
+      candidateResult.rawOverall < current.rawOverall;
+
+    if (candidateIdentities.has(targetIdentity) || reintroduced || madeWorse) {
+      items.push({
+        ruleId: issue.ruleId,
+        ruleName: issue.name,
+        severity: issue.severity,
+        status: 'skipped',
+        change: candidateIdentities.has(targetIdentity)
+          ? '自动调整无法在当前房间尺度内消除该问题，已保持原位'
+          : reintroduced
+            ? '该调整会重新引入已解决的问题，已保持原位'
+            : '该调整会降低五维原始评分或新增高风险问题，已保持原位',
+      });
+      continue;
+    }
+
+    working = candidate;
+    resolved.add(targetIdentity);
 
     items.push({
       ruleId: issue.ruleId,
@@ -74,23 +101,28 @@ export function applyAllFixesToElements(
     });
   }
 
-  // 终检：若某项「已优化」后该规则在最新布局上仍触发（与另一项优化冲突），
-  // 则如实降级为「需手动」，避免摘要给出虚假的「已优化」。
-  const finalResult = analyzePlan(working, options);
-  const stillFixable = new Set(
-    finalResult.issues
-      .filter((i) => i.fix)
-      .map((i) => `${i.ruleId}:${i.fix!.targetId}`),
-  );
-  for (const item of items) {
-    if (item.status === 'applied' && item.targetId) {
-      const key = `${item.ruleId}:${item.targetId}`;
-      if (stillFixable.has(key)) {
-        item.status = 'skipped';
-        item.change = '优化后该问题仍存在（布局约束冲突，需手动微调）';
-      }
-    }
-  }
-
   return { elements: working, items };
+}
+
+function manualReason(ruleId: string): string {
+  switch (ruleId) {
+    case 'bathroom-in-center':
+      return '涉及卫生间湿区、排水与防水位置，不能自动移动；需由建筑师或专业设计师评估';
+    case 'entry-door-faces-bathroom':
+    case 'entry-door-faces-bedroom-door':
+    case 'door-faces-door':
+    case 'bathroom-faces-kitchen':
+      return '涉及门洞、墙体或隐私隔断，不能作为家具调整自动应用；请生成结构候选方案';
+    case 'long-corridor':
+    case 'living-room-far-from-entry':
+      return '涉及主要动线和功能分区，自动移动单个家具无法安全解决';
+    case 'kitchen-bathroom-too-close':
+      return '涉及厨房与卫生间湿区及管线关系，不能自动移动房间';
+    case 'missing-corner':
+      return '属于整体户型轮廓问题，不能通过移动标注元素安全修复';
+    case 'through-draft':
+      return '需要玄关或隔断阻断直线视线，不能作为普通家具调整自动应用';
+    default:
+      return '当前规则没有满足安全约束的自动修正动作，请按规则建议手动调整';
+  }
 }

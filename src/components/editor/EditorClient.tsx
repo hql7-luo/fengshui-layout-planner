@@ -4,7 +4,7 @@ import dynamic from 'next/dynamic';
 import Link from 'next/link';
 import { useCallback, useEffect, useMemo, useState } from 'react';
 import { IssueList } from '@/components/analysis/IssueList';
-import { CategoryBars, IssueCounts, ScoreRing } from '@/components/analysis/ScoreSummary';
+import { CategoryBars, IssueCounts, ScoreCapNotice, ScoreRing } from '@/components/analysis/ScoreSummary';
 import { CandidatePanel } from '@/components/editor/CandidatePanel';
 import { ElementPalette } from '@/components/editor/ElementPalette';
 import { EditorToolbar } from '@/components/editor/EditorToolbar';
@@ -14,7 +14,7 @@ import { PlanSettings } from '@/components/editor/PlanSettings';
 import { useAnalysis } from '@/hooks/use-analysis';
 import { useHydrated } from '@/hooks/use-hydrated';
 import { ImageLoadError, readPlanImage } from '@/lib/image';
-import { computeLayers, type AllLayers } from '@/lib/analysis-layers';
+import { computeLayers, LAYER_IDS, type AllLayers } from '@/lib/analysis-layers';
 import { SAMPLES } from '@/lib/samples';
 import type { ElementType, Issue, PlanElement } from '@/lib/types';
 import {
@@ -44,6 +44,10 @@ export function EditorClient() {
   const selectedId = useProjectStore((s) => s.selectedId);
   const canUndo = useProjectStore(selectCanUndo);
   const canRedo = useProjectStore(selectCanRedo);
+  const activeLayers = useProjectStore((s) => s.activeLayers);
+  const candidates = useProjectStore((s) => s.candidates);
+  const previewPlanId = useProjectStore((s) => s.previewPlanId);
+  const persistenceNotice = useProjectStore((s) => s.persistenceNotice);
 
   const createSampleProject = useProjectStore((s) => s.createSampleProject);
   const createBlankProject = useProjectStore((s) => s.createBlankProject);
@@ -60,6 +64,7 @@ export function EditorClient() {
   const select = useProjectStore((s) => s.select);
   const undo = useProjectStore((s) => s.undo);
   const redo = useProjectStore((s) => s.redo);
+  const dismissPersistenceNotice = useProjectStore((s) => s.dismissPersistenceNotice);
 
   const [zoom, setZoom] = useState(1);
   const [showIssues, setShowIssues] = useState(true);
@@ -73,16 +78,24 @@ export function EditorClient() {
   // 分析图层随当前场景（改造前 / 改造后）实时重算；computeLayers 为纯函数，不修改 elements
   const layers = useMemo<AllLayers | null>(() => {
     if (!result || !project) return null;
-    return computeLayers({
-      elements,
-      analysis: result,
-      options: {
-        pixelsPerMeter: project.pixelsPerMeter,
-        northAngle: project.northAngle,
-        canvas: project.canvas,
+    return computeLayers(
+      {
+        elements,
+        analysis: result,
+        options: {
+          pixelsPerMeter: project.pixelsPerMeter,
+          northAngle: project.northAngle,
+          canvas: project.canvas,
+        },
       },
-    });
-  }, [result, project, elements]);
+      LAYER_IDS.filter((id) => activeLayers[id]),
+    );
+  }, [result, project, elements, activeLayers]);
+
+  const previewPlan = candidates?.plans.find((plan) => plan.id === previewPlanId)
+    ?? candidates?.plans[0]
+    ?? null;
+  const currentStructure = project?.scenarios[scenario].structure ?? project?.structure;
 
   const selected: PlanElement | null = useMemo(
     () => elements.find((el) => el.id === selectedId) ?? null,
@@ -200,6 +213,14 @@ export function EditorClient() {
       {error ? (
         <p className="border-b border-clay/25 bg-clay-soft px-4 py-2 text-xs text-clay">{error}</p>
       ) : null}
+      {persistenceNotice ? (
+        <div className="flex items-center justify-between gap-3 border-b border-ochre/30 bg-ochre-soft px-4 py-2 text-xs text-ink-soft">
+          <span>{persistenceNotice}</span>
+          <button type="button" onClick={dismissPersistenceNotice} className="shrink-0 underline underline-offset-2">
+            知道了
+          </button>
+        </div>
+      ) : null}
 
       <div className="grid flex-1 gap-0 lg:grid-cols-[260px_minmax(0,1fr)_300px]">
         {/* 左：元素库 + 图纸设置 */}
@@ -225,7 +246,7 @@ export function EditorClient() {
         </aside>
 
         {/* 中：画布 */}
-        <main className="order-1 min-h-[52vh] border-b border-line bg-paper-deep/40 lg:order-2 lg:min-h-0 lg:border-b-0">
+        <main className="order-1 min-h-[20rem] min-w-0 border-b border-line bg-paper-deep/40 lg:order-2 lg:min-h-0 lg:border-b-0">
           <PlanCanvas
             project={project}
             elements={elements}
@@ -234,6 +255,8 @@ export function EditorClient() {
             showIssues={showIssues}
             zoom={zoom}
             layers={layers}
+            previewPlan={previewPlan}
+            structure={currentStructure}
             onSelect={select}
             onChange={(id, patch) => updateElement(id, patch)}
           />
@@ -281,6 +304,7 @@ export function EditorClient() {
                     <IssueCounts result={result} />
                   </div>
                   <CategoryBars result={result} />
+                  <ScoreCapNotice result={result} />
                 </>
               ) : null}
               <IssueList issues={issues} onFocus={handleFocusIssue} />

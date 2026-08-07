@@ -111,7 +111,7 @@ describe('analyzePlan 基础行为', () => {
     expect(c.issues.map((i) => i.key)).toEqual(a.issues.map((i) => i.key));
   });
 
-  it('总分等于五维加权求和', () => {
+  it('五维原始分等于等权平均；严重问题仅封顶综合分，不篡改分类分', () => {
     const elements = sampleElements('bathroom-in-center');
     const result = analyzePlan(elements, {
       pixelsPerMeter: SAMPLE_PIXELS_PER_METER,
@@ -124,7 +124,9 @@ describe('analyzePlan 基础行为', () => {
         0,
       ),
     );
-    expect(result.overall).toBe(expected);
+    expect(result.rawOverall).toBe(expected);
+    expect(result.overall).toBeLessThanOrEqual(result.rawOverall);
+    expect(result.scoreCap?.value).toBe(89);
   });
 
   it('所有分数被限制在 0-100', () => {
