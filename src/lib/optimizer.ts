@@ -21,12 +21,17 @@ import {
   midpoint,
   normalize,
   roomOfDoor,
-  roomsConnected,
-  roomsOverlap,
+  polygonBounds,
   sub,
   toDeg,
 } from './geometry';
 import { ELEMENT_SPECS } from './element-catalog';
+import {
+  cloneStructureModel,
+  deriveWallsFromRooms,
+  movePartitionWall,
+  validateStructuralScenario,
+} from './structural-geometry';
 
 /**
  * 结构优化器（纯函数、确定性）。
@@ -62,23 +67,6 @@ export interface OptimizerInput {
 /* ------------------------------------------------------------------ */
 /* 结构模型推导                                                        */
 /* ------------------------------------------------------------------ */
-
-function unionRoomBounds(elements: PlanElement[]): { x: number; y: number; width: number; height: number } {
-  const rooms = elements.filter((e) => ELEMENT_SPECS[e.type]?.category === 'room');
-  if (rooms.length === 0) return { x: 0, y: 0, width: 1080, height: 840 };
-  let minX = Infinity;
-  let minY = Infinity;
-  let maxX = -Infinity;
-  let maxY = -Infinity;
-  for (const r of rooms) {
-    const b = aabb(r);
-    minX = Math.min(minX, b.x);
-    minY = Math.min(minY, b.y);
-    maxX = Math.max(maxX, b.x + b.width);
-    maxY = Math.max(maxY, b.y + b.height);
-  }
-  return { x: minX, y: minY, width: maxX - minX, height: maxY - minY };
-}
 
 function projectPointToWall(point: Point, wall: Wall): { point: Point; t: number; distance: number } {
   const vx = wall.x2 - wall.x1;
@@ -117,64 +105,46 @@ export function buildStructureFromElements(
   loadBearingMarked: boolean,
   ppm = 75,
 ): StructureModel {
-  const bounds = unionRoomBounds(elements);
-  const t = 0.2;
-  const walls: Wall[] = [
-    { id: 'ext-top', kind: 'exterior', x1: bounds.x, y1: bounds.y, x2: bounds.x + bounds.width, y2: bounds.y, thicknessM: t, movable: false, adjacentRooms: [null, null], hasDoor: false, hasWindow: false },
-    { id: 'ext-bottom', kind: 'exterior', x1: bounds.x, y1: bounds.y + bounds.height, x2: bounds.x + bounds.width, y2: bounds.y + bounds.height, thicknessM: t, movable: false, adjacentRooms: [null, null], hasDoor: false, hasWindow: false },
-    { id: 'ext-left', kind: 'exterior', x1: bounds.x, y1: bounds.y, x2: bounds.x, y2: bounds.y + bounds.height, thicknessM: t, movable: false, adjacentRooms: [null, null], hasDoor: false, hasWindow: false },
-    { id: 'ext-right', kind: 'exterior', x1: bounds.x + bounds.width, y1: bounds.y, x2: bounds.x + bounds.width, y2: bounds.y + bounds.height, thicknessM: t, movable: false, adjacentRooms: [null, null], hasDoor: false, hasWindow: false },
-  ];
-
   const rooms = elements.filter((e) => ELEMENT_SPECS[e.type]?.category === 'room');
-  for (const room of rooms) {
-    const [topLeft, topRight, bottomRight, bottomLeft] = corners(room);
-    const edges: Array<[string, number, number, number, number]> = [
-      ['top', topLeft.x, topLeft.y, topRight.x, topRight.y],
-      ['right', topRight.x, topRight.y, bottomRight.x, bottomRight.y],
-      ['bottom', bottomRight.x, bottomRight.y, bottomLeft.x, bottomLeft.y],
-      ['left', bottomLeft.x, bottomLeft.y, topLeft.x, topLeft.y],
-    ];
-    for (const [side, x1, y1, x2, y2] of edges) {
-      walls.push({
-        id: `room-${room.id}-${side}`,
-        kind: 'partition',
-        x1,
-        y1,
-        x2,
-        y2,
-        thicknessM: 0.12,
-        movable: true,
-        adjacentRooms: [room.id, null],
-        hasDoor: false,
-        hasWindow: false,
-      });
-    }
-  }
+  const derivedWalls = deriveWallsFromRooms(elements).filter((wall) => wall.kind !== 'exterior').map((wall) =>
+    loadBearingMarked && wall.kind === 'unknown'
+      ? { ...wall, kind: 'partition' as const, movable: true }
+      : wall,
+  );
+  const roomPoints = rooms.flatMap(corners);
+  const bounds = roomPoints.length ? polygonBounds(roomPoints) : { x: 0, y: 0, width: 1080, height: 840 };
+  // 保留完整外轮廓，覆盖开放过道没有房间矩形贴边的情况；外墙始终不可移动。
+  const walls: Wall[] = [
+    { id: 'ext-top', kind: 'exterior', x1: bounds.x, y1: bounds.y, x2: bounds.x + bounds.width, y2: bounds.y, thicknessM: 0.2, movable: false, adjacentRooms: [null, null], hasDoor: false, hasWindow: false },
+    { id: 'ext-bottom', kind: 'exterior', x1: bounds.x, y1: bounds.y + bounds.height, x2: bounds.x + bounds.width, y2: bounds.y + bounds.height, thicknessM: 0.2, movable: false, adjacentRooms: [null, null], hasDoor: false, hasWindow: false },
+    { id: 'ext-left', kind: 'exterior', x1: bounds.x, y1: bounds.y, x2: bounds.x, y2: bounds.y + bounds.height, thicknessM: 0.2, movable: false, adjacentRooms: [null, null], hasDoor: false, hasWindow: false },
+    { id: 'ext-right', kind: 'exterior', x1: bounds.x + bounds.width, y1: bounds.y, x2: bounds.x + bounds.width, y2: bounds.y + bounds.height, thicknessM: 0.2, movable: false, adjacentRooms: [null, null], hasDoor: false, hasWindow: false },
+    ...derivedWalls,
+  ];
 
   const doors: DoorOpening[] = [];
   for (const el of elements) {
     if (el.type === 'entry_door') {
       // 凹形户型的真实外边界不一定落在整体包围盒四边；匹配最近房间边线，
       // 再由 opening.movable=false 保证入户门不会被自动调整。
-      const wall = nearestWall(center(el), walls, ['exterior', 'partition'], DOOR_ROOM_TOL_M * ppm);
+      const wall = nearestWall(center(el), walls, ['exterior', 'partition', 'unknown'], DOOR_ROOM_TOL_M * ppm);
       doors.push({ id: `do-${el.id}`, wallId: wall?.id ?? `unassigned-${el.id}`, point: wall ? projectPointToWall(center(el), wall).point : center(el), widthM: el.width / ppm, kind: 'entry', linkedElementId: el.id, movable: false });
     } else if (el.type === 'room_door') {
       const room = roomOfDoor(rooms, el, DOOR_ROOM_TOL_M * ppm);
       const kind: DoorOpening['kind'] = room?.type === 'bathroom' ? 'bathroom' : room?.type === 'kitchen' ? 'kitchen' : room?.type === 'balcony' ? 'balcony' : 'room';
       const roomWalls = room
         ? walls.filter((wall) => wall.adjacentRooms.includes(room.id))
-        : walls.filter((wall) => wall.kind === 'partition');
-      const wall = nearestWall(center(el), roomWalls, ['partition'], DOOR_ROOM_TOL_M * ppm);
-      doors.push({ id: `do-${el.id}`, wallId: wall?.id ?? `unassigned-${el.id}`, point: wall ? projectPointToWall(center(el), wall).point : center(el), widthM: el.width / ppm, kind, linkedElementId: el.id, movable: Boolean(wall) });
+        : walls.filter((wall) => wall.kind === 'partition' || wall.kind === 'unknown');
+      const wall = nearestWall(center(el), roomWalls, ['partition', 'unknown'], DOOR_ROOM_TOL_M * ppm);
+      doors.push({ id: `do-${el.id}`, wallId: wall?.id ?? `unassigned-${el.id}`, point: wall ? projectPointToWall(center(el), wall).point : center(el), widthM: el.width / ppm, kind, linkedElementId: el.id, movable: wall?.kind === 'partition' });
     }
   }
 
   const windows = elements
     .filter((el) => el.type === 'window')
     .map((el) => {
-      const wall = nearestWall(center(el), walls, ['exterior', 'partition'], DOOR_ROOM_TOL_M * ppm);
-      return { id: `wo-${el.id}`, wallId: wall?.id ?? `unassigned-${el.id}`, point: wall ? projectPointToWall(center(el), wall).point : center(el), widthM: el.width / ppm };
+      const wall = nearestWall(center(el), walls, ['exterior', 'partition', 'unknown'], DOOR_ROOM_TOL_M * ppm);
+      return { id: `wo-${el.id}`, wallId: wall?.id ?? `unassigned-${el.id}`, point: wall ? projectPointToWall(center(el), wall).point : center(el), widthM: el.width / ppm, linkedElementId: el.id };
     });
 
   for (const door of doors) {
@@ -197,13 +167,7 @@ export function buildStructureFromElements(
 }
 
 function cloneStructure(s: StructureModel): StructureModel {
-  return {
-    walls: s.walls.map((w) => ({ ...w })),
-    doors: s.doors.map((d) => ({ ...d })),
-    windows: s.windows.map((w) => ({ ...w })),
-    zones: s.zones.map((z) => ({ ...z })),
-    loadBearingMarked: s.loadBearingMarked,
-  };
+  return cloneStructureModel(s);
 }
 
 /* ------------------------------------------------------------------ */
@@ -278,6 +242,54 @@ function shiftDoorOnWall(
   return { position: next };
 }
 
+function wallMoveModification(
+  ctx: BuildCtx,
+  preferredRoomIds: string[],
+  distanceM: number,
+): { modification?: PlanModification; reason?: string } {
+  const preferred = new Set(preferredRoomIds);
+  const sharedWalls = ctx.structure.walls
+    .filter((wall) => wall.adjacentRooms[0] && wall.adjacentRooms[1])
+    .sort((a, b) => {
+      const score = (wall: Wall) => wall.adjacentRooms.filter((roomId) => roomId && preferred.has(roomId)).length;
+      return score(b) - score(a) || a.id.localeCompare(b.id);
+    });
+  const partitions = sharedWalls.filter((wall) => wall.kind === 'partition' && wall.movable);
+  if (!partitions.length) {
+    const protectedWall = sharedWalls.find((wall) => wall.kind !== 'partition');
+    if (protectedWall?.kind === 'unknown') {
+      return { reason: `相关共享墙「${protectedWall.id}」属性为未知；只有用户明确标记为非承重墙后才可自动移动` };
+    }
+    if (protectedWall?.kind === 'load-bearing') return { reason: `相关共享墙「${protectedWall.id}」为承重墙，不可自动移动` };
+    if (protectedWall?.kind === 'exterior') return { reason: '相关墙段属于外墙，不可移动' };
+    return { reason: '未找到同时连接两个房间的可移动非承重墙' };
+  }
+  const failures: string[] = [];
+  for (const wall of partitions) {
+    for (const signedDistance of [distanceM, -distanceM]) {
+      const moved = movePartitionWall(ctx.baseElements, ctx.structure, wall.id, signedDistance, ctx.ppm);
+      if (!moved.feasible || !moved.wallMove) {
+        if (moved.reason) failures.push(moved.reason);
+        continue;
+      }
+      const direction = Math.abs(wall.x2 - wall.x1) >= Math.abs(wall.y2 - wall.y1) ? '垂直' : '水平';
+      const areaSummary = moved.roomAreaChanges
+        .map((change) => `${change.roomName} ${change.deltaM2 >= 0 ? '+' : ''}${change.deltaM2.toFixed(2)}㎡`)
+        .join('，');
+      return {
+        modification: {
+          kind: 'move-wall',
+          label: '移动非承重墙',
+          description: `将共享墙「${wall.id}」${direction}平移 ${Math.abs(signedDistance).toFixed(2)} 米；${areaSummary}。墙上门窗与端部连接段同步更新。`,
+          movedWalls: [moved.wallMove],
+          roomAreaChanges: moved.roomAreaChanges,
+        },
+      };
+    }
+  }
+  return { reason: [...new Set(failures)].slice(0, 3).join('；') || '非承重墙在允许距离内没有满足面积、通道和连通性约束的位置' };
+}
+
 /* ------------------------------------------------------------------ */
 /* 候选方案构建                                                        */
 /* ------------------------------------------------------------------ */
@@ -293,9 +305,9 @@ interface BuildCtx {
 }
 
 function applyElements(base: PlanElement[], mods: PlanModification[]): PlanElement[] {
-  let els = base.map((e) => ({ ...e }));
+  let els = base.map((e) => ({ ...e, polygon: e.polygon?.map((point) => ({ ...point })) }));
   for (const mod of mods) {
-    if (mod.addedElements) els = [...els, ...mod.addedElements.map((e) => ({ ...e }))];
+    if (mod.addedElements) els = [...els, ...mod.addedElements.map((e) => ({ ...e, polygon: e.polygon?.map((point) => ({ ...point })) }))];
     if (mod.movedElementIds) {
       els = els.map((e) => {
         const mv = mod.movedElementIds!.find((m) => m.id === e.id);
@@ -316,7 +328,13 @@ function applyStructure(structure: StructureModel, mods: PlanModification[]): St
       for (const sid of mod.sealedDoorIds) sealedIds.add(sid);
       next.doors = next.doors.filter((d) => !mod.sealedDoorIds!.includes(d.id));
     }
-    if (mod.addedWalls) next.walls = [...next.walls, ...mod.addedWalls.map((w) => ({ ...w }))];
+    if (mod.addedWalls) next.walls = [
+      ...next.walls,
+      ...mod.addedWalls.map((w) => ({
+        ...w,
+        adjacentRooms: [...w.adjacentRooms] as [string | null, string | null],
+      })),
+    ];
   }
   // 同步门洞元素移位到结构模型；墙体本身保持连续，旧 opening 移除后在同一墙段创建新 opening。
   for (const mod of mods) {
@@ -342,6 +360,25 @@ function applyStructure(structure: StructureModel, mods: PlanModification[]): St
   return next;
 }
 
+function applyPlanModifications(
+  baseElements: PlanElement[],
+  structure: StructureModel,
+  mods: PlanModification[],
+  ppm: number,
+): { elements: PlanElement[]; structure: StructureModel; reason?: string } {
+  let elements = applyElements(baseElements, mods);
+  let projectedStructure = applyStructure(structure, mods);
+  for (const movedWall of mods.flatMap((modification) => modification.movedWalls ?? [])) {
+    const result = movePartitionWall(elements, projectedStructure, movedWall.wallId, movedWall.distanceM, ppm);
+    if (!result.feasible) {
+      return { elements, structure: projectedStructure, reason: result.reason ?? '墙体移动没有可行几何解' };
+    }
+    elements = result.elements;
+    projectedStructure = result.structure;
+  }
+  return { elements, structure: projectedStructure };
+}
+
 function validatePlan(
   projectedElements: PlanElement[],
   projectedStructure: StructureModel,
@@ -350,18 +387,15 @@ function validatePlan(
   windows: PlanElement[],
   ppm: number,
 ): string | null {
-  // 1. 外墙与承重墙不可移动
+  // 1. 外墙、承重墙与 unknown 墙不可移动；按稳定 id 比对，新增连接段不影响检查。
   const sameWall = (a: Wall, b: Wall) =>
     a.kind === b.kind && a.x1 === b.x1 && a.y1 === b.y1 && a.x2 === b.x2 && a.y2 === b.y2;
-  for (const kind of ['exterior', 'load-bearing'] as const) {
+  for (const kind of ['exterior', 'load-bearing', 'unknown'] as const) {
     const orig = originalStructure.walls.filter((w) => w.kind === kind);
-    const proj = projectedStructure.walls.filter((w) => w.kind === kind);
-    if (orig.length !== proj.length) {
-      return kind === 'exterior' ? '移动了外墙' : '移动了承重墙';
-    }
-    for (let i = 0; i < orig.length; i += 1) {
-      if (!sameWall(orig[i], proj[i])) {
-        return kind === 'exterior' ? '移动了外墙' : '移动了承重墙';
+    for (const original of orig) {
+      const projected = projectedStructure.walls.find((wall) => wall.id === original.id);
+      if (!projected || !sameWall(original, projected)) {
+        return kind === 'exterior' ? '移动了外墙' : kind === 'load-bearing' ? '移动了承重墙' : '移动了未知属性墙体';
       }
     }
   }
@@ -396,17 +430,8 @@ function validatePlan(
     if (!isPointOnWall(opening.point, wall, 0.03 * ppm)) return `窗洞「${opening.id}」偏离所属墙体`;
   }
 
-  // 4. 房间不得过度重叠
-  const rooms = projectedElements.filter((e) => ELEMENT_SPECS[e.type]?.category === 'room');
-  for (let i = 0; i < rooms.length; i += 1) {
-    for (let j = i + 1; j < rooms.length; j += 1) {
-      if (roomsOverlap(rooms[i], rooms[j])) return '造成房间重叠';
-    }
-  }
-  // 5. 所有房间保持标注可达
-  const doors = projectedElements.filter((e) => e.type === 'entry_door' || e.type === 'room_door');
-  if (!roomsConnected(rooms, doors, 0.3 * ppm)) return '产生不可达房间';
-  return null;
+  // 4. polygon、面积、房间重叠、湿区、通道宽度、门窗和主要房间可达性统一校验。
+  return validateStructuralScenario(projectedElements, projectedStructure, ppm);
 }
 
 function overlapArea(a: { x: number; y: number; width: number; height: number }, b: { x: number; y: number; width: number; height: number }): number {
@@ -423,7 +448,9 @@ function infeasiblePlan(
   reason: string,
   ctx: BuildCtx,
 ): CandidatePlan {
-  const finalRisks = ctx.conceptOnly ? ['未标记承重墙，本方案为概念候选，不可直接施工'] : [];
+  const finalRisks = ctx.conceptOnly
+    ? ['未完成墙体属性确认，本方案为概念候选，不可直接施工；需建筑师、结构设计师或物业确认']
+    : [];
   return {
     id,
     title,
@@ -442,6 +469,7 @@ function infeasiblePlan(
     introducedIssues: [],
     valueScore: 0,
     changeDegree: 'minimal',
+    changeCost: 0,
     risks: finalRisks,
     conceptOnly: ctx.conceptOnly,
   };
@@ -456,8 +484,9 @@ function buildPlan(
 ): CandidatePlan {
   // 家具自动优化作为基础，再叠加结构改动
   const { elements: furnitureFixed } = applyAllFixesToElements(ctx.baseElements, ctx.options, ctx.ppm);
-  const projectedElements = applyElements(furnitureFixed, mods);
-  const projectedStructure = applyStructure(ctx.structure, mods);
+  const applied = applyPlanModifications(furnitureFixed, ctx.structure, mods, ctx.ppm);
+  const projectedElements = applied.elements;
+  const projectedStructure = applied.structure;
 
   const projected = analyzePlan(projectedElements, ctx.options);
   const baseIdentities = new Set(ctx.baseResult.issues.map(issueIdentity));
@@ -466,7 +495,7 @@ function buildPlan(
   const introduced = projected.issues.filter((issue) => !baseIdentities.has(issueIdentity(issue)));
   const remaining = projected.issues.map((i) => i.key);
 
-  let infeasible = validatePlan(
+  let infeasible = applied.reason ?? validatePlan(
     projectedElements,
     projectedStructure,
     ctx.structure,
@@ -487,13 +516,33 @@ function buildPlan(
   const movedDoors = mods.reduce((n, m) => n + (m.movedElementIds?.length ?? 0), 0);
   const screens = mods.reduce((n, m) => n + (m.addedElements?.length ?? 0), 0);
   const walls = mods.reduce((n, m) => n + (m.addedWalls?.length ?? 0), 0);
+  const movedWalls = mods.reduce((n, m) => n + (m.movedWalls?.length ?? 0), 0);
+  const wallDistanceCost = mods.reduce(
+    (sum, modification) => sum + (modification.movedWalls ?? []).reduce(
+      (inner, move) => inner + Math.ceil(Math.abs(move.distanceM) * 10),
+      0,
+    ),
+    0,
+  );
   const solvedPenalty = solved.reduce((s, i) => s + i.appliedPenalty, 0);
   const introducedPenalty = introduced.reduce((sum, issue) => sum + issue.appliedPenalty, 0);
   const valueScore = Math.round(
-    solvedPenalty - introducedPenalty - movedDoors * COST_MOVE - screens * COST_SCREEN - walls * COST_WALL,
+    solvedPenalty - introducedPenalty - movedDoors * COST_MOVE - screens * COST_SCREEN - walls * COST_WALL - movedWalls * 7 - wallDistanceCost,
   );
 
-  const degree: CandidatePlan['changeDegree'] = mods.length >= 3 ? 'major' : mods.length === 2 ? 'balanced' : 'minimal';
+  const changeCost = movedDoors * COST_MOVE + screens * COST_SCREEN + walls * COST_WALL + movedWalls * 7 + wallDistanceCost;
+
+  const maximumWallDistance = Math.max(
+    0,
+    ...mods.flatMap((modification) => modification.movedWalls?.map((move) => Math.abs(move.distanceM)) ?? []),
+  );
+  const degree: CandidatePlan['changeDegree'] = id === 'A'
+    ? 'minimal'
+    : id === 'B'
+      ? 'balanced'
+      : maximumWallDistance >= 0.45 || mods.length >= 2
+        ? 'major'
+        : 'balanced';
 
   const finalRisks = [...risks];
 
@@ -527,6 +576,9 @@ function buildPlan(
   if (hasPartition) {
     finalRisks.push('新增隔断 / 屏风为非承重构件，安装前需确认楼板承载及管线避让，建议由物业确认施工许可。');
   }
+  if (movedWalls > 0) {
+    finalRisks.push('非承重墙平移已通过本模型的几何与连通性约束，但不构成施工依据；开工前须复核墙内管线、防水、消防、楼板与物业许可。');
+  }
 
   if (ctx.conceptOnly) finalRisks.unshift('未标记承重墙，本方案为概念候选，不可直接施工；需建筑师、结构设计师或物业确认后方可实施');
 
@@ -548,6 +600,7 @@ function buildPlan(
     introducedIssues: introduced.map(issueDigest),
     valueScore,
     changeDegree: degree,
+    changeCost,
     risks: finalRisks,
     conceptOnly: ctx.conceptOnly,
   };
@@ -563,6 +616,10 @@ interface ProblemSolution {
   minimal: PlanModification[];
   /** 彻底解决集（改动更大、预期得分更高） */
   full: PlanModification[];
+  /** 方案 B 使用的小范围墙体平移 */
+  balancedWall?: PlanModification;
+  /** 方案 C 使用的更明显、仍在安全搜索范围内的墙体平移 */
+  maximumWall?: PlanModification;
   /** 无法彻底解决时的具体原因 */
   reason?: string;
 }
@@ -643,13 +700,19 @@ function solveEntryBathroom(ctx: BuildCtx, issue: Issue): ProblemSolution {
   }
 
   const full = [...relocate, ...(screenMod ? [screenMod] : [])];
+  const preferredRoomIds = issue.elementIds.filter((id) => rooms.some((room) => room.id === id));
+  const balancedWall = wallMoveModification(ctx, preferredRoomIds, 0.3);
+  const maximumWall = wallMoveModification(ctx, preferredRoomIds, 0.5);
   return {
     type: 'entry-bathroom',
     minimal,
     full: full.length ? full : minimal,
-    reason: relocate.length
-      ? undefined
-      : `${shift.reason ?? shiftForward.reason ?? '没有足够墙面移动门洞'}（仅可做玄关遮挡）`,
+    balancedWall: balancedWall.modification,
+    maximumWall: maximumWall.modification,
+    reason: [
+      relocate.length ? null : `${shift.reason ?? shiftForward.reason ?? '没有足够墙面移动门洞'}（仅可做玄关遮挡）`,
+      maximumWall.reason ? `墙体调整：${maximumWall.reason}` : null,
+    ].filter(Boolean).join('；') || undefined,
   };
 }
 function solveDoorDoor(ctx: BuildCtx, issue: Issue): ProblemSolution {
@@ -702,10 +765,20 @@ function solveDoorDoor(ctx: BuildCtx, issue: Issue): ProblemSolution {
     };
   }
 
+  const rooms = ctx.baseElements.filter((room) => ELEMENT_SPECS[room.type]?.category === 'room');
+  const preferredRoomIds = [doorA, doorB]
+    .map((door) => roomOfDoor(rooms, door, DOOR_ROOM_TOL_M * ctx.ppm)?.id)
+    .filter((id): id is string => Boolean(id));
+  const balancedWall = wallMoveModification(ctx, preferredRoomIds, 0.25);
+  const maximumWall = wallMoveModification(ctx, preferredRoomIds, 0.45);
+
   return {
     type: 'door-door',
     minimal: mods.length ? mods : modsFull.slice(0, 1),
     full: modsFull,
+    balancedWall: balancedWall.modification,
+    maximumWall: maximumWall.modification,
+    reason: maximumWall.reason ? `墙体调整：${maximumWall.reason}` : undefined,
   };
 }
 
@@ -756,12 +829,24 @@ function solveLongCorridor(ctx: BuildCtx, issue: Issue): ProblemSolution {
     });
   }
 
+  const rooms = ctx.baseElements.filter((room) => ELEMENT_SPECS[room.type]?.category === 'room');
+  const preferredRoomIds = movable
+    .map((door) => roomOfDoor(rooms, door, DOOR_ROOM_TOL_M * ctx.ppm)?.id)
+    .filter((id): id is string => Boolean(id));
+  const balancedWall = wallMoveModification(ctx, preferredRoomIds, 0.3);
+  const maximumWall = wallMoveModification(ctx, preferredRoomIds, 0.55);
+
   if (entryMods.length === 0) {
     return {
       type: 'long-corridor',
       minimal: [nodeMod],
       full: [nodeMod],
-      reason: `${shiftReasons.join('；') || '沿走廊房间墙面不足'}（仅可做走廊节点分割）`,
+      balancedWall: balancedWall.modification,
+      maximumWall: maximumWall.modification,
+      reason: [
+        `${shiftReasons.join('；') || '沿走廊房间墙面不足'}（仅可做走廊节点分割）`,
+        maximumWall.reason ? `墙体调整：${maximumWall.reason}` : null,
+      ].filter(Boolean).join('；'),
     };
   }
 
@@ -769,6 +854,9 @@ function solveLongCorridor(ctx: BuildCtx, issue: Issue): ProblemSolution {
     type: 'long-corridor',
     minimal: [entryMods[0]],
     full: [...entryMods, nodeMod],
+    balancedWall: balancedWall.modification,
+    maximumWall: maximumWall.modification,
+    reason: maximumWall.reason ? `墙体调整：${maximumWall.reason}` : undefined,
   };
 }
 
@@ -848,27 +936,66 @@ export function generateCandidatePlans(input: OptimizerInput): OptimizationResul
 
   // A：仅解决优先级最高问题的最小改动
   const modsA = dedupeMods(solvable[0].minimal);
-  // B：优先级最高问题彻底解决 + 次优先问题最小改动
-  const modsB = dedupeMods([...solvable[0].full, ...(solvable[1]?.minimal ?? [])]);
-  // C：所有问题彻底解决
-  const modsC = dedupeMods(solvable.flatMap((s) => s.full));
+  // B：优先级最高问题彻底解决 + 小范围共享墙平移 + 次优先问题最小改动
+  const modsB = dedupeMods([
+    ...solvable[0].full,
+    ...(solvable[0].balancedWall ? [solvable[0].balancedWall] : []),
+    ...(solvable[1]?.minimal ?? []),
+  ]);
+  // C：所有问题彻底解决 + 更大但仍通过安全搜索的墙体平移
+  const modsC = dedupeMods([
+    ...solvable.flatMap((solution) => solution.full),
+    ...solvable.flatMap((solution) => solution.maximumWall ? [solution.maximumWall] : []),
+  ]);
+  const modsCSafe = dedupeMods([
+    ...solvable[0].full,
+    ...(solvable[0].maximumWall ? [solvable[0].maximumWall] : []),
+    ...solvable.slice(1).flatMap((solution) => solution.minimal),
+  ]);
+  const modsCStructural = dedupeMods([
+    ...solvable[0].minimal,
+    ...(solvable[0].maximumWall ? [solvable[0].maximumWall] : []),
+  ]);
 
   const partial = reasons.length ? ['部分问题受结构限制无法彻底解决 —— ' + reasons.join('；')] : [];
 
-  const plans = [
-    buildPlan('A', '方案 A · ' + planTitle(solvable[0].type, 'minimal') + '（最小改动）', ctx, modsA, [
+  const planA = buildPlan('A', '方案 A · ' + planTitle(solvable[0].type, 'minimal') + '（最小改动）', ctx, modsA, [
       '改动范围最小、造价最低，仅处理优先级最高的结构问题。',
       ...partial,
-    ]),
-    buildPlan('B', '方案 B · ' + planTitle(solvable[0].type, 'full') + '（综合平衡）', ctx, modsB, [
+    ]);
+  const planB = buildPlan('B', '方案 B · ' + planTitle(solvable[0].type, 'full') + '（综合平衡）', ctx, modsB, [
       '涉及门洞开凿与封堵，需现场确认所在墙体为非承重墙。',
       ...partial,
-    ]),
-    buildPlan('C', '方案 C · 结构综合调整', ctx, modsC, [
+    ]);
+  const cRisks = [
       '改动范围最大、工期与造价最高，建议由结构工程师复核后施工。',
       ...partial,
-    ]),
   ];
+  const cVariants = [modsC, modsCSafe, modsCStructural]
+    .filter((mods, index, list) => list.findIndex((candidate) => JSON.stringify(candidate) === JSON.stringify(mods)) === index)
+    .map((mods) => buildPlan('C', '方案 C · 评分最高结构调整', ctx, mods, cRisks));
+  const planC = [...cVariants].sort((a, b) =>
+    Number(b.feasible) - Number(a.feasible) ||
+    b.predictedScore - a.predictedScore ||
+    b.solvedIssues.length - a.solvedIssues.length ||
+    b.valueScore - a.valueScore,
+  )[0];
+  const plans: CandidatePlan[] = [planA, planB, planC];
+
+  // 不用重复方案凑数：若约束下 B/C 与更低成本方案完全相同，明确返回 no-feasible-plan 原因。
+  for (let index = 1; index < plans.length; index += 1) {
+    const duplicate = plans.slice(0, index).find(
+      (candidate) => candidate.feasible && JSON.stringify(candidate.modifications) === JSON.stringify(plans[index].modifications),
+    );
+    if (plans[index].feasible && duplicate) {
+      plans[index] = infeasiblePlan(
+        plans[index].id,
+        plans[index].title,
+        `no-feasible-plan：当前已标记墙体与安全约束下，无法生成区别于方案 ${duplicate.id} 的额外结构改动`,
+        ctx,
+      );
+    }
+  }
 
   return { plans, hasStructuralIssue: true, generatedAt: 0 };
 }
@@ -900,6 +1027,7 @@ function dedupeMods(mods: PlanModification[]): PlanModification[] {
   const out: PlanModification[] = [];
   const addedIds = new Set<string>();
   const movedIds = new Set<string>();
+  const movedWallIds = new Set<string>();
   for (let i = mods.length - 1; i >= 0; i -= 1) {
     const mod = mods[i];
     const addKey = (mod.addedElements ?? []).map((e) => e.id).join(',');
@@ -908,6 +1036,9 @@ function dedupeMods(mods: PlanModification[]): PlanModification[] {
     const mvKey = (mod.movedElementIds ?? []).map((e) => e.id).join(',');
     if (mvKey && movedIds.has(mvKey)) continue;
     if (mvKey) movedIds.add(mvKey);
+    const wallKey = (mod.movedWalls ?? []).map((wall) => wall.wallId).join(',');
+    if (wallKey && movedWallIds.has(wallKey)) continue;
+    if (wallKey) movedWallIds.add(wallKey);
     out.unshift(mod);
   }
   return out;
@@ -945,6 +1076,7 @@ function buildFurnitureOnly(ctx: BuildCtx): CandidatePlan[] {
     introducedIssues: introduced.map(issueDigest),
     valueScore: Math.round(solved.reduce((s, i) => s + i.appliedPenalty, 0)),
     changeDegree: 'minimal',
+    changeCost: 0,
     risks: conceptRisk,
     conceptOnly: false,
   };

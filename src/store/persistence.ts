@@ -12,7 +12,7 @@ import type {
 } from '@/lib/types';
 
 export const STORAGE_KEY = 'fengshui-layout-planner:v1';
-export const STORAGE_VERSION = 2;
+export const STORAGE_VERSION = 3;
 
 export const DEFAULT_ACTIVE_LAYERS: Record<LayerId, boolean> = {
   heatmap: false,
@@ -56,6 +56,13 @@ function sanitizeElement(value: unknown): PlanElement | null {
   const width = finite(item.width, 0);
   const height = finite(item.height, 0);
   if (width <= 0 || height <= 0) return null;
+  const polygon = Array.isArray(item.polygon)
+    ? item.polygon.flatMap((value) => {
+        const point = record(value);
+        if (!point || typeof point.x !== 'number' || !Number.isFinite(point.x) || typeof point.y !== 'number' || !Number.isFinite(point.y)) return [];
+        return [{ x: point.x, y: point.y }];
+      })
+    : [];
   return {
     id: item.id,
     type: item.type as PlanElement['type'],
@@ -65,6 +72,7 @@ function sanitizeElement(value: unknown): PlanElement | null {
     width,
     height,
     rotation: ((finite(item.rotation, 0) % 360) + 360) % 360,
+    ...(polygon.length >= 3 ? { polygon } : {}),
   };
 }
 
@@ -73,9 +81,9 @@ function sanitizeStructure(value: unknown): StructureModel | undefined {
   if (!source || !Array.isArray(source.walls) || !Array.isArray(source.doors)) return undefined;
   const walls = source.walls.flatMap((value) => {
     const wall = record(value);
-    if (!wall || typeof wall.id !== 'string' || !['exterior', 'load-bearing', 'partition'].includes(String(wall.kind))) return [];
+    if (!wall || typeof wall.id !== 'string' || !['exterior', 'load-bearing', 'partition', 'unknown'].includes(String(wall.kind))) return [];
     const adjacent = Array.isArray(wall.adjacentRooms) ? wall.adjacentRooms : [null, null];
-    const kind = wall.kind as 'exterior' | 'load-bearing' | 'partition';
+    const kind = wall.kind as 'exterior' | 'load-bearing' | 'partition' | 'unknown';
     return [{
       id: wall.id,
       kind,
@@ -123,6 +131,7 @@ function sanitizeStructure(value: unknown): StructureModel | undefined {
       wallId: opening.wallId,
       point: { x: finite(point.x, 0), y: finite(point.y, 0) },
       widthM: clamp(finite(opening.widthM, 1.2), 0.2, 8),
+      linkedElementId: typeof opening.linkedElementId === 'string' ? opening.linkedElementId : undefined,
     }];
   });
   if (rawWindows.length !== windows.length) return undefined;
@@ -216,6 +225,7 @@ function validPlan(value: unknown): value is CandidatePlan {
         'add-screen',
         'add-node',
         'merge-corridor',
+        'move-wall',
         'furniture-fix',
       ].includes(String(modification.kind)) ||
       typeof modification.label !== 'string' ||
@@ -252,6 +262,35 @@ function validPlan(value: unknown): value is CandidatePlan {
       });
       if (!structure || structure.walls.length !== modification.addedWalls.length) return false;
     }
+    if (modification.movedWalls !== undefined && (
+      !Array.isArray(modification.movedWalls) ||
+      !modification.movedWalls.every((value) => {
+        const move = record(value);
+        const from = Array.isArray(move?.from) ? move.from : [];
+        const to = Array.isArray(move?.to) ? move.to : [];
+        const validPoint = (value: unknown) => {
+          const point = record(value);
+          return Boolean(point && typeof point.x === 'number' && Number.isFinite(point.x) && typeof point.y === 'number' && Number.isFinite(point.y));
+        };
+        return Boolean(
+          move && typeof move.wallId === 'string' &&
+          from.length === 2 && from.every(validPoint) && to.length === 2 && to.every(validPoint) &&
+          typeof move.distanceM === 'number' && Number.isFinite(move.distanceM),
+        );
+      })
+    )) return false;
+    if (modification.roomAreaChanges !== undefined && (
+      !Array.isArray(modification.roomAreaChanges) ||
+      !modification.roomAreaChanges.every((value) => {
+        const change = record(value);
+        return Boolean(
+          change && typeof change.roomId === 'string' && typeof change.roomName === 'string' &&
+          ['beforeM2', 'afterM2', 'deltaM2'].every(
+            (key) => typeof change[key] === 'number' && Number.isFinite(change[key]),
+          ),
+        );
+      })
+    )) return false;
     return true;
   };
   return Boolean(
@@ -276,6 +315,7 @@ function validPlan(value: unknown): value is CandidatePlan {
       Array.isArray(plan.introducedIssues) && plan.introducedIssues.every(validDigest) &&
       typeof plan.valueScore === 'number' && Number.isFinite(plan.valueScore) &&
       ['minimal', 'balanced', 'major'].includes(String(plan.changeDegree)) &&
+      typeof plan.changeCost === 'number' && Number.isFinite(plan.changeCost) && plan.changeCost >= 0 &&
       Array.isArray(plan.risks) && plan.risks.every((risk) => typeof risk === 'string') &&
       typeof plan.conceptOnly === 'boolean',
   );
@@ -332,4 +372,30 @@ export function normalizePersistedState(value: unknown, preserveCandidates = tru
     activeLayers,
     layerOpacity: clamp(finite(source.layerOpacity, 0.55), 0, 1),
   };
+}
+
+/**
+ * v2 以前的 partition 全部来自自动矩形推导，并非用户明确确认的非承重墙。
+ * v3 迁移时保守降级为 unknown，防止升级后自动移动未经确认的结构；旧候选一并丢弃重算。
+ */
+export function migratePersistedState(value: unknown, storedVersion: number): PersistedProjectState {
+  if (storedVersion >= STORAGE_VERSION) return normalizePersistedState(value, true);
+  const downgradeInferredPartitions = (candidate: unknown): unknown => {
+    if (Array.isArray(candidate)) return candidate.map(downgradeInferredPartitions);
+    const source = record(candidate);
+    if (!source) return candidate;
+    const output: Record<string, unknown> = {};
+    for (const [key, nested] of Object.entries(source)) output[key] = downgradeInferredPartitions(nested);
+    if (
+      output.kind === 'partition' &&
+      typeof output.x1 === 'number' && typeof output.y1 === 'number' &&
+      typeof output.x2 === 'number' && typeof output.y2 === 'number' &&
+      Array.isArray(output.adjacentRooms)
+    ) {
+      output.kind = 'unknown';
+      output.movable = false;
+    }
+    return output;
+  };
+  return normalizePersistedState(downgradeInferredPartitions(value), false);
 }

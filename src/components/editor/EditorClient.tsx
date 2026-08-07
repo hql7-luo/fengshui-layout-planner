@@ -9,12 +9,14 @@ import { CandidatePanel } from '@/components/editor/CandidatePanel';
 import { ElementPalette } from '@/components/editor/ElementPalette';
 import { EditorToolbar } from '@/components/editor/EditorToolbar';
 import { Inspector } from '@/components/editor/Inspector';
+import { WallInspector } from '@/components/editor/WallInspector';
 import LayerPanel from '@/components/editor/LayerPanel';
 import { PlanSettings } from '@/components/editor/PlanSettings';
 import { useAnalysis } from '@/hooks/use-analysis';
 import { useHydrated } from '@/hooks/use-hydrated';
 import { ImageLoadError, readPlanImage } from '@/lib/image';
 import { computeLayers, LAYER_IDS, type AllLayers } from '@/lib/analysis-layers';
+import { buildStructureFromElements } from '@/lib/optimizer';
 import { SAMPLES } from '@/lib/samples';
 import type { ElementType, Issue, PlanElement } from '@/lib/types';
 import {
@@ -65,12 +67,14 @@ export function EditorClient() {
   const undo = useProjectStore((s) => s.undo);
   const redo = useProjectStore((s) => s.redo);
   const dismissPersistenceNotice = useProjectStore((s) => s.dismissPersistenceNotice);
+  const setWallKind = useProjectStore((s) => s.setWallKind);
 
   const [zoom, setZoom] = useState(1);
   const [showIssues, setShowIssues] = useState(true);
   const [panel, setPanel] = useState<SidePanel>('elements');
   const [error, setError] = useState<string | null>(null);
   const [focusedIssue, setFocusedIssue] = useState<string | null>(null);
+  const [selectedWallId, setSelectedWallId] = useState<string | null>(null);
 
   const result = useAnalysis(project, scenario);
   const issues = useMemo(() => result?.issues ?? [], [result]);
@@ -95,7 +99,12 @@ export function EditorClient() {
   const previewPlan = candidates?.plans.find((plan) => plan.id === previewPlanId)
     ?? candidates?.plans[0]
     ?? null;
-  const currentStructure = project?.scenarios[scenario].structure ?? project?.structure;
+  const currentStructure = useMemo(() => {
+    if (!project) return undefined;
+    return project.scenarios[scenario].structure ?? project.structure ??
+      buildStructureFromElements(elements, false, project.pixelsPerMeter);
+  }, [elements, project, scenario]);
+  const selectedWall = currentStructure?.walls.find((wall) => wall.id === selectedWallId) ?? null;
 
   const selected: PlanElement | null = useMemo(
     () => elements.find((el) => el.id === selectedId) ?? null,
@@ -118,7 +127,10 @@ export function EditorClient() {
         event.preventDefault();
         removeElement(selectedId);
       }
-      if (event.key === 'Escape') select(null);
+      if (event.key === 'Escape') {
+        select(null);
+        setSelectedWallId(null);
+      }
     }
     window.addEventListener('keydown', onKey);
     return () => window.removeEventListener('keydown', onKey);
@@ -252,12 +264,21 @@ export function EditorClient() {
             elements={elements}
             issues={showIssues ? issues : []}
             selectedId={selectedId}
+            selectedWallId={selectedWallId}
             showIssues={showIssues}
             zoom={zoom}
             layers={layers}
             previewPlan={previewPlan}
             structure={currentStructure}
-            onSelect={select}
+            onSelect={(id) => {
+              setSelectedWallId(null);
+              select(id);
+            }}
+            onWallSelect={(id) => {
+              select(null);
+              setSelectedWallId(id);
+              setPanel('elements');
+            }}
             onChange={(id, patch) => updateElement(id, patch)}
           />
         </main>
@@ -285,16 +306,24 @@ export function EditorClient() {
           </div>
 
           {panel === 'elements' ? (
-            <Inspector
-              element={selected}
-              pixelsPerMeter={project.pixelsPerMeter}
-              onChange={(patch) => {
-                if (selected) updateElement(selected.id, patch);
-              }}
-              onDelete={() => {
-                if (selected) removeElement(selected.id);
-              }}
-            />
+            selectedWall ? (
+              <WallInspector
+                wall={selectedWall}
+                pixelsPerMeter={project.pixelsPerMeter}
+                onKind={(kind) => setWallKind(selectedWall.id, kind)}
+              />
+            ) : (
+              <Inspector
+                element={selected}
+                pixelsPerMeter={project.pixelsPerMeter}
+                onChange={(patch) => {
+                  if (selected) updateElement(selected.id, patch);
+                }}
+                onDelete={() => {
+                  if (selected) removeElement(selected.id);
+                }}
+              />
+            )
           ) : (
             <div className="space-y-4">
               {result ? (

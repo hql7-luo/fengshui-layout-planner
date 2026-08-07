@@ -16,7 +16,7 @@ export function CandidatePanel() {
       <div className="rounded-lg border border-line bg-white p-3 text-sm">
         <h3 className="mb-2 font-semibold text-ink">结构优化方案</h3>
         <p className="mb-3 text-xs text-muted">
-          基于当前户型生成 A/B/C 候选：最小改动、综合平衡、结构综合调整。结构候选只做可校验的门洞沿墙移位与玄关 / 隔断，不自动移动房间、外墙或承重墙。
+          基于当前户型生成 A/B/C 候选：最小改动、综合平衡、评分最高。只有明确标记为“非承重墙”的共享墙才能自动移动；外墙、承重墙和未知墙体保持不变。
         </p>
         <button
           type="button"
@@ -83,10 +83,12 @@ export function CandidatePanel() {
             <>
               <p className="text-muted">
                 预测评分 {activePlan.predictedScore}（原 {activePlan.originalScore}）· 解决{' '}
-                {activePlan.solvedIssues.length} 项 · 新增 {activePlan.introducedIssues.length} 项
+                {activePlan.solvedIssues.length} 项 · 新增 {activePlan.introducedIssues.length} 项 ·{' '}
+                改动程度 {activePlan.changeDegree === 'minimal' ? '低' : activePlan.changeDegree === 'balanced' ? '中' : '高'}
+                （成本点 {activePlan.changeCost}）
               </p>
               <p className="rounded bg-jade-soft/60 px-2 py-1 text-jade-deep">
-                画布正在预览：红色叉号为封闭旧门洞，虚线箭头为移位，新隔断以绿色实线显示。
+                画布预览：原墙为灰色虚线，新墙为绿色实线；红叉为删除门洞，绿色标记为新门洞；面积增减区域使用红/绿半透明覆盖。
               </p>
               {duplicateOf ? (
                 <p className="rounded bg-paper-deep px-2 py-1 text-muted">

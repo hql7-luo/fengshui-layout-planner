@@ -80,6 +80,9 @@ export function frontMidpoint(el: PlanElement): Point {
 
 /** 旋转矩形的四个角点，顺序为左上、右上、右下、左下（局部坐标系） */
 export function corners(el: PlanElement): Point[] {
+  if (el.polygon && el.polygon.length >= 3) {
+    return el.polygon.map((point) => ({ ...point }));
+  }
   const hw = el.width / 2;
   const hh = el.height / 2;
   const local: Point[] = [
@@ -151,6 +154,7 @@ export function distance(a: PlanElement, b: PlanElement): number {
 
 /** 点是否落在（可旋转的）矩形内部 */
 export function containsPoint(el: PlanElement, p: Point): boolean {
+  if (el.polygon && el.polygon.length >= 3) return pointInPolygon(p, el.polygon);
   const d = sub(p, center(el));
   const local = rotateVec(d, -el.rotation);
   return Math.abs(local.x) <= el.width / 2 + 1e-6 && Math.abs(local.y) <= el.height / 2 + 1e-6;
@@ -162,6 +166,13 @@ export function containsElement(container: PlanElement, el: PlanElement): boolea
 
 /** 点到（可旋转）矩形四条边的最短距离，点在内部时返回到最近边的距离 */
 export function distanceToBoundary(el: PlanElement, p: Point): number {
+  if (el.polygon && el.polygon.length >= 3) {
+    let best = Infinity;
+    for (let i = 0; i < el.polygon.length; i += 1) {
+      best = Math.min(best, pointToSegmentDistance(p, el.polygon[i], el.polygon[(i + 1) % el.polygon.length]));
+    }
+    return best;
+  }
   const d = sub(p, center(el));
   const local = rotateVec(d, -el.rotation);
   const hw = el.width / 2;
@@ -264,6 +275,158 @@ function cross(o: Point, a: Point, b: Point): number {
   return (a.x - o.x) * (b.y - o.y) - (a.y - o.y) * (b.x - o.x);
 }
 
+export function pointToSegmentDistance(point: Point, start: Point, end: Point): number {
+  const vx = end.x - start.x;
+  const vy = end.y - start.y;
+  const lengthSquared = vx * vx + vy * vy;
+  if (lengthSquared <= 1e-12) return Math.hypot(point.x - start.x, point.y - start.y);
+  const t = clamp(((point.x - start.x) * vx + (point.y - start.y) * vy) / lengthSquared, 0, 1);
+  return Math.hypot(point.x - (start.x + vx * t), point.y - (start.y + vy * t));
+}
+
+/** 有向面积；画布坐标中顺时针矩形为正值。 */
+export function signedPolygonArea(points: Point[]): number {
+  let twiceArea = 0;
+  for (let i = 0; i < points.length; i += 1) {
+    const a = points[i];
+    const b = points[(i + 1) % points.length];
+    twiceArea += a.x * b.y - b.x * a.y;
+  }
+  return twiceArea / 2;
+}
+
+export function polygonArea(points: Point[]): number {
+  return Math.abs(signedPolygonArea(points));
+}
+
+export function polygonCentroid(points: Point[]): Point {
+  const signedArea = signedPolygonArea(points);
+  if (Math.abs(signedArea) < 1e-9) {
+    return {
+      x: points.reduce((sum, point) => sum + point.x, 0) / Math.max(1, points.length),
+      y: points.reduce((sum, point) => sum + point.y, 0) / Math.max(1, points.length),
+    };
+  }
+  let x = 0;
+  let y = 0;
+  for (let i = 0; i < points.length; i += 1) {
+    const a = points[i];
+    const b = points[(i + 1) % points.length];
+    const factor = a.x * b.y - b.x * a.y;
+    x += (a.x + b.x) * factor;
+    y += (a.y + b.y) * factor;
+  }
+  const divisor = 6 * signedArea;
+  return { x: x / divisor, y: y / divisor };
+}
+
+export function polygonBounds(points: Point[]): BBox {
+  const xs = points.map((point) => point.x);
+  const ys = points.map((point) => point.y);
+  const minX = Math.min(...xs);
+  const minY = Math.min(...ys);
+  const maxX = Math.max(...xs);
+  const maxY = Math.max(...ys);
+  return { x: minX, y: minY, width: maxX - minX, height: maxY - minY };
+}
+
+/** 边界视为在 polygon 内，便于门洞/湿区边缘校验。 */
+export function pointInPolygon(point: Point, polygon: Point[]): boolean {
+  let inside = false;
+  for (let i = 0, j = polygon.length - 1; i < polygon.length; j = i, i += 1) {
+    const a = polygon[j];
+    const b = polygon[i];
+    if (pointToSegmentDistance(point, a, b) <= 1e-7) return true;
+    const crosses = (a.y > point.y) !== (b.y > point.y) &&
+      point.x < ((b.x - a.x) * (point.y - a.y)) / (b.y - a.y) + a.x;
+    if (crosses) inside = !inside;
+  }
+  return inside;
+}
+
+function samePoint(a: Point, b: Point, tolerance = 1e-6): boolean {
+  return Math.hypot(a.x - b.x, a.y - b.y) <= tolerance;
+}
+
+/** 删除重复点和不改变边界的共线中间点。 */
+export function simplifyPolygon(points: Point[], tolerance = 1e-6): Point[] {
+  const unique: Point[] = [];
+  for (const point of points) {
+    if (!unique.length || !samePoint(unique[unique.length - 1], point, tolerance)) unique.push({ ...point });
+  }
+  if (unique.length > 1 && samePoint(unique[0], unique[unique.length - 1], tolerance)) unique.pop();
+  let changed = true;
+  while (changed && unique.length >= 4) {
+    changed = false;
+    for (let i = 0; i < unique.length; i += 1) {
+      const prev = unique[(i - 1 + unique.length) % unique.length];
+      const current = unique[i];
+      const next = unique[(i + 1) % unique.length];
+      if (Math.abs(cross(prev, current, next)) <= tolerance &&
+          dot(sub(current, prev), sub(next, current)) >= -tolerance) {
+        unique.splice(i, 1);
+        changed = true;
+        break;
+      }
+    }
+  }
+  return unique;
+}
+
+export function isSimplePolygon(points: Point[]): boolean {
+  if (points.length < 3 || polygonArea(points) <= 1e-6) return false;
+  for (let i = 0; i < points.length; i += 1) {
+    const a1 = points[i];
+    const a2 = points[(i + 1) % points.length];
+    if (samePoint(a1, a2)) return false;
+    for (let j = i + 1; j < points.length; j += 1) {
+      const adjacent = j === i || j === i + 1 || (i === 0 && j === points.length - 1);
+      if (adjacent) continue;
+      const b1 = points[j];
+      const b2 = points[(j + 1) % points.length];
+      if (segmentsIntersect(a1, a2, b1, b2)) return false;
+    }
+  }
+  return true;
+}
+
+/**
+ * 两个简单 polygon 是否存在内部重叠。共享边界/端点不算重叠；结构移动校验使用。
+ * 对本项目的正交户型，通过各顶点 x 分段后做中点扫描，结果为确定性精确面积。
+ */
+export function polygonOverlapArea(a: Point[], b: Point[]): number {
+  const xs = [...new Set([...a, ...b].map((point) => point.x))].sort((x, y) => x - y);
+  let area = 0;
+  const intervalsAt = (polygon: Point[], x: number): Array<[number, number]> => {
+    const ys: number[] = [];
+    for (let i = 0; i < polygon.length; i += 1) {
+      const p = polygon[i];
+      const q = polygon[(i + 1) % polygon.length];
+      if ((p.x <= x && x < q.x) || (q.x <= x && x < p.x)) {
+        const t = (x - p.x) / (q.x - p.x);
+        ys.push(p.y + (q.y - p.y) * t);
+      }
+    }
+    ys.sort((y1, y2) => y1 - y2);
+    const intervals: Array<[number, number]> = [];
+    for (let i = 0; i + 1 < ys.length; i += 2) intervals.push([ys[i], ys[i + 1]]);
+    return intervals;
+  };
+  for (let i = 0; i + 1 < xs.length; i += 1) {
+    const width = xs[i + 1] - xs[i];
+    if (width <= 1e-9) continue;
+    const x = (xs[i] + xs[i + 1]) / 2;
+    const ia = intervalsAt(a, x);
+    const ib = intervalsAt(b, x);
+    let overlap = 0;
+    for (const [a1, a2] of ia) {
+      for (const [b1, b2] of ib) overlap += Math.max(0, Math.min(a2, b2) - Math.max(a1, b1));
+    }
+    area += width * overlap;
+  }
+  return area;
+}
+
 /** 两线段是否相交（含端点接触） */
 export function segmentsIntersect(p1: Point, p2: Point, p3: Point, p4: Point): boolean {
   const d1 = cross(p3, p4, p1);
@@ -330,6 +493,9 @@ export function bboxOverlapArea(a: BBox, b: BBox): number {
  * 重叠面积超过较小房间面积的 15% 视为冲突。
  */
 export function roomsOverlap(a: PlanElement, b: PlanElement): boolean {
+  if (a.polygon || b.polygon) {
+    return polygonOverlapArea(corners(a), corners(b)) > 0.5;
+  }
   const boxA = aabb(a);
   const boxB = aabb(b);
   const overlap = bboxOverlapArea(boxA, boxB);

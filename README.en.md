@@ -27,7 +27,8 @@ Highlights:
 - Mark 18 element types (rooms / openings / furniture / screens) with drag, resize, rotate, rename, delete, undo/redo.
 - A deterministic rule engine produces an overall score and five-dimension scores.
 - Issues are annotated on the plan with traditional / modern explanations and suggestions.
-- Preview and explicitly apply A/B/C candidates; candidate scores are re-computed by the same rule engine.
+- Classify a wall as exterior, load-bearing, partition, or unknown; only an explicitly confirmed partition can be moved automatically.
+- Preview and explicitly apply distinct A/B/C candidates, including real shared-wall movement with synchronized room polygons; candidate scores are re-computed by the same rule engine.
 - Seven deterministic, independently switchable analysis layers with opacity, calculation basis, and before/after recomputation.
 - Versioned local persistence with safe migration/recovery; before / after comparison; printable report.
 
@@ -97,10 +98,11 @@ Next.js 16 (App Router) · React 19 · TypeScript · Tailwind CSS v4 · react-ko
 
 ## Current boundaries
 
-- The structure model is inferred from user-marked room rectangles and openings; it is not CAD/BIM or structural recognition.
-- Automated structural candidates cover door openings moved along their attached non-load-bearing partition, sealing the former opening, and adding an entry screen/short partition. They do **not** move exterior/load-bearing walls or room boundaries and are not construction drawings.
-- Without explicit load-bearing-wall data, every door/partition change is labelled a conceptual candidate. A qualified architect/structural designer and property management must confirm all real work.
-- Reachability is a deterministic proximity check, not a full building-accessibility or fire-egress analysis.
+- The structure model is inferred from user-marked room boundaries and openings; it is not CAD/BIM, structural recognition, or an automatic load-bearing assessment.
+- Automated wall movement is limited to axis-aligned shared segments with marked rooms on both sides and an explicit `partition` classification. The search range is 0.15–0.8 m; both room polygons, areas, centroids, attached doors, and windows are synchronized.
+- `exterior` and `load-bearing` walls are immutable; `unknown` walls allow conceptual advice only. Diagonal/curved walls, compound junctions, and one-sided wall segments are not moved automatically.
+- Candidates validate minimum room area/width, self-intersection/overlap, opening attachment, wet-zone position, reachability, and newly introduced high-severity issues. These checks are reference-grade geometry, not structural, fire-egress, accessibility, or construction approval.
+- A qualified architect/structural designer and property management must confirm all real work. Candidates are not construction drawings.
 - localStorage is convenient persistence, not a durable backup.
 
 ## License

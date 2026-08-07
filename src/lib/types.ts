@@ -53,6 +53,12 @@ export interface PlanElement {
   height: number;
   /** 顺时针旋转角度 */
   rotation: number;
+  /**
+   * 房间的真实边界（画布绝对坐标）。
+   * 缺省时仍使用 x/y/width/height/rotation 表示的旋转矩形；墙体移动后写入 polygon，
+   * x/y/width/height 会同步为 polygon 的几何中心与包围盒，供旧规则和编辑器兼容使用。
+   */
+  polygon?: Point[];
 }
 
 export type ScenarioKey = 'before' | 'after';
@@ -208,7 +214,7 @@ export interface AnalysisResult {
 /* 墙体结构模型                                                        */
 /* ------------------------------------------------------------------ */
 
-export type WallKind = 'exterior' | 'load-bearing' | 'partition';
+export type WallKind = 'exterior' | 'load-bearing' | 'partition' | 'unknown';
 
 /** 一段独立墙体：起点终点（像素）、厚度、类型、是否可移动、相邻房间、是否含门窗 */
 export interface Wall {
@@ -219,7 +225,7 @@ export interface Wall {
   x2: number;
   y2: number;
   thicknessM: number;
-  /** 由 kind 推导：exterior / load-bearing 恒为 false，partition 为 true */
+  /** 由 kind 推导：只有明确标记为 partition 时为 true */
   movable: boolean;
   adjacentRooms: [string | null, string | null];
   hasDoor: boolean;
@@ -246,6 +252,7 @@ export interface WindowOpening {
   wallId: string;
   point: Point;
   widthM: number;
+  linkedElementId?: string;
 }
 
 export type ZoneKind = 'wet' | 'fixed';
@@ -283,7 +290,24 @@ export type ModificationKind =
   | 'add-screen'
   | 'add-node'
   | 'merge-corridor'
+  | 'move-wall'
   | 'furniture-fix';
+
+export interface WallMoveRecord {
+  wallId: string;
+  from: [Point, Point];
+  to: [Point, Point];
+  /** 带方向的移动距离（米） */
+  distanceM: number;
+}
+
+export interface RoomAreaChange {
+  roomId: string;
+  roomName: string;
+  beforeM2: number;
+  afterM2: number;
+  deltaM2: number;
+}
 
 /** 单条优化动作的改动记录（用于结果摘要） */
 export interface PlanModification {
@@ -299,6 +323,10 @@ export interface PlanModification {
   movedElementIds?: Array<{ id: string; x: number; y: number; rotation?: number }>;
   /** 新增的元素（玄关屏风等） */
   addedElements?: PlanElement[];
+  /** 真正移动的共享非承重墙及前后坐标 */
+  movedWalls?: WallMoveRecord[];
+  /** 墙体移动导致的房间面积变化 */
+  roomAreaChanges?: RoomAreaChange[];
 }
 
 export type ChangeDegree = 'minimal' | 'balanced' | 'major';
@@ -334,6 +362,8 @@ export interface CandidatePlan {
   /** 优化价值 = 解决问题扣分 − 改动成本 − 约束惩罚 */
   valueScore: number;
   changeDegree: ChangeDegree;
+  /** 由改动项确定性计算的相对成本点数；只用于方案比较，不是施工报价 */
+  changeCost: number;
   risks: string[];
   /** 用户未标记承重墙时为 true，方案仅作概念候选、不可直接施工 */
   conceptOnly: boolean;
