@@ -22,7 +22,23 @@ interface StoredPlan {
   id: 'A' | 'B' | 'C';
   feasible: boolean;
   predictedScore: number;
-  modifications: unknown[];
+  modifications: Array<{
+    kind: string;
+    movedWalls?: Array<{ wallId: string; distanceM: number }>;
+    roomAreaChanges?: Array<{ roomId: string; beforeM2: number; afterM2: number }>;
+  }>;
+}
+
+interface StoredStructure {
+  walls: Array<{
+    id: string;
+    kind: 'exterior' | 'load-bearing' | 'partition' | 'unknown';
+    x1: number;
+    y1: number;
+    x2: number;
+    y2: number;
+    adjacentRooms: [string | null, string | null];
+  }>;
 }
 
 interface StoredEnvelope {
@@ -31,6 +47,7 @@ interface StoredEnvelope {
     projects: Record<string, {
       canvas: { width: number; height: number };
       scenarios: { before: StoredScenario; after: StoredScenario };
+      structure?: StoredStructure;
     }>;
     currentId: string;
     scenario: 'before' | 'after';
@@ -57,6 +74,30 @@ async function loadFirstSample(page: Page) {
   await expect(page.locator('[data-testid="plan-canvas"] canvas').first()).toBeVisible();
 }
 
+async function markSharedWallAsPartition(page: Page) {
+  const initial = await persisted(page);
+  const project = initial.state.projects[initial.state.currentId];
+  const shared = project.structure?.walls.find((wall) => wall.adjacentRooms[0] && wall.adjacentRooms[1]);
+  if (!shared) throw new Error('sample has no shared wall');
+  const stage = page.locator('[data-testid="plan-canvas"] .konvajs-content');
+  await stage.scrollIntoViewIfNeeded();
+  const box = await stage.boundingBox();
+  if (!box) throw new Error('Konva stage has no bounding box');
+  const x = box.x + (((shared.x1 + shared.x2) / 2) / project.canvas.width) * box.width;
+  const y = box.y + (((shared.y1 + shared.y2) / 2) / project.canvas.height) * box.height;
+  await page.mouse.click(x, y);
+  await expect(page.locator('[data-testid="wall-inspector"]')).toBeVisible();
+  await page.locator('[data-testid="wall-kind-partition"]').click();
+  await expect(page.locator('[data-testid="wall-kind-partition"]')).toHaveAttribute('aria-pressed', 'true');
+  await expect.poll(async () => {
+    const state = await persisted(page);
+    return state.state.projects[state.state.currentId].scenarios.before.structure &&
+      (state.state.projects[state.state.currentId].scenarios.before.structure as StoredStructure).walls
+        .find((wall) => wall.id === shared.id)?.kind;
+  }).toBe('partition');
+  return shared.id;
+}
+
 function captureRuntimeProblems(page: Page) {
   const errors: string[] = [];
   page.on('console', (message) => {
@@ -79,6 +120,7 @@ function captureRuntimeProblems(page: Page) {
 test('候选、七图层、结构应用、原子撤销、刷新和报告完整闭环', async ({ page }, testInfo) => {
   const runtimeProblems = captureRuntimeProblems(page);
   await loadFirstSample(page);
+  const markedWallId = await markSharedWallAsPartition(page);
 
   const expand = page.getByRole('button', { name: '展开' });
   if (await expand.isVisible()) await expand.click();
@@ -113,8 +155,11 @@ test('候选、七图层、结构应用、原子撤销、刷新和报告完整�
   for (const id of ['A', 'B', 'C'] as const) {
     await expect(page.locator(`[data-testid="candidate-${id}"]`)).toBeVisible();
   }
-  await page.locator('[data-testid="candidate-B"]').click();
-  await expect(page.locator('[data-testid="candidate-B"]')).toHaveAttribute('aria-pressed', 'true');
+  for (const id of ['A', 'C', 'B'] as const) {
+    await page.locator(`[data-testid="candidate-${id}"]`).click();
+    await expect(page.locator(`[data-testid="candidate-${id}"]`)).toHaveAttribute('aria-pressed', 'true');
+    await expect.poll(async () => (await persisted(page)).state.previewPlanId).toBe(id);
+  }
 
   const generated = await persisted(page);
   const projectId = generated.state.currentId;
@@ -122,14 +167,26 @@ test('候选、七图层、结构应用、原子撤销、刷新和报告完整�
   const priorAfter = JSON.stringify(generated.state.projects[projectId].scenarios.after);
   const planB = generated.state.candidates!.plans.find((plan) => plan.id === 'B')!;
   expect(planB.feasible).toBe(true);
+  expect(planB.modifications.some((modification) =>
+    modification.kind === 'move-wall' && modification.movedWalls?.some((wall) => wall.wallId === markedWallId)
+  )).toBe(true);
+  expect(planB.modifications.flatMap((modification) => modification.roomAreaChanges ?? []).length).toBe(2);
   expect(
     new Set(generated.state.candidates!.plans.map((plan) => JSON.stringify(plan.modifications))).size,
-  ).toBeGreaterThanOrEqual(2);
+  ).toBe(3);
+  await expect(page.getByText(/原墙为灰色虚线，新墙为绿色实线/)).toBeVisible();
   const canvasLayerCountWithCandidate = await page
     .locator('[data-testid="plan-canvas"] .konvajs-content canvas')
     .count();
   expect(canvasLayerCountWithCandidate).toBeGreaterThan(canvasLayerCountBeforeCandidate);
   expect(canvasLayerCountWithCandidate).toBeLessThanOrEqual(5);
+
+  const screenshotsDir = path.join(process.cwd(), 'tests', 'screenshots');
+  mkdirSync(screenshotsDir, { recursive: true });
+  await page.screenshot({
+    path: path.join(screenshotsDir, `${testInfo.project.name}-wall-preview.png`),
+    fullPage: true,
+  });
 
   await page.reload();
   if (await page.getByRole('button', { name: '展开' }).isVisible()) {
@@ -145,6 +202,9 @@ test('候选、七图层、结构应用、原子撤销、刷新和报告完整�
   expect(JSON.stringify(applied.state.projects[projectId].scenarios.before)).toBe(beforeSnapshot);
   expect(JSON.stringify(applied.state.projects[projectId].scenarios.after)).not.toBe(priorAfter);
   expect(applied.state.projects[projectId].scenarios.after.structure).toBeTruthy();
+  expect(applied.state.projects[projectId].scenarios.after.elements.some((element) =>
+    Array.isArray((element as StoredElement & { polygon?: unknown[] }).polygon)
+  )).toBe(true);
   await expect(page.getByText(new RegExp(`综合评分 ${planB.predictedScore}$`))).toBeVisible();
 
   const undo = page.getByRole('button', { name: '撤销' });
@@ -159,8 +219,6 @@ test('候选、七图层、结构应用、原子撤销、刷新和报告完整�
   await expect.poll(async () => Boolean((await persisted(page)).state.projects[projectId].scenarios.after.structure)).toBe(true);
 
   expect(await page.evaluate(() => document.documentElement.scrollWidth <= window.innerWidth + 1)).toBe(true);
-  const screenshotsDir = path.join(process.cwd(), 'tests', 'screenshots');
-  mkdirSync(screenshotsDir, { recursive: true });
   await page.screenshot({ path: path.join(screenshotsDir, `${testInfo.project.name}-final.png`), fullPage: true });
 
   await page.getByRole('link', { name: '生成分析报告' }).click();
@@ -228,6 +286,6 @@ test('上传、添加、改名、旋转、真实拖拽、删除、撤销恢复�
   await expect.poll(async () => (await persisted(page)).state.projects[projectId].scenarios.before.elements.length).toBe(countBefore);
 
   state = await persisted(page);
-  expect(state.version).toBe(2);
+  expect(state.version).toBe(3);
   expect(runtimeProblems, runtimeProblems.join('\n')).toEqual([]);
 });

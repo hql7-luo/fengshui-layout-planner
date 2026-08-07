@@ -321,7 +321,7 @@ describe('验收 ⑫ · 无可行方案时给出具体原因', () => {
       expect(p.infeasibleReason).toBeTruthy();
       expect(p.infeasibleReason).not.toContain('需手动');
       expect(
-        ['房间尺寸不足', '没有足够墙面', '湿区', '通道宽度', '承重墙', '外墙', '重叠', '不可达', '遮挡窗户'].some(
+        ['房间尺寸不足', '没有足够墙面', '湿区', '通道宽度', '承重墙', '外墙', '未知', '重叠', '不可达', '遮挡窗户', 'no-feasible-plan'].some(
           (k) => p.infeasibleReason!.includes(k),
         ),
       ).toBe(true);

@@ -22,6 +22,9 @@ const samples = [
   { name: '开放式客餐厅户型', elements: openLivingDining() },
 ];
 
+const representativeNames = new Set(['长走廊户型', '双卫生间户型', '开放式客餐厅户型']);
+const representativeResults: string[] = [];
+
 console.log('=== 五个真实户型评分变化 ===');
 for (const sample of samples) {
   const analysis = analyzePlan(sample.elements, OPTIONS);
@@ -30,6 +33,9 @@ for (const sample of samples) {
   const bestPlan = opt.plans
     .filter((p) => p.feasible)
     .sort((a, b) => b.predictedScore - a.predictedScore)[0];
+  const structuralPlan = opt.plans
+    .filter((plan) => plan.feasible && plan.modifications.some((modification) => modification.kind === 'move-wall'))
+    .sort((a, b) => b.predictedScore - a.predictedScore || b.changeCost - a.changeCost)[0];
 
   console.log(`\n${sample.name}:`);
   console.log(`  原始评分: ${analysis.overall}`);
@@ -43,7 +49,23 @@ for (const sample of samples) {
     console.log('  无可行结构优化方案');
     console.log(`  约束原因: ${[...new Set(opt.plans.map((plan) => plan.infeasibleReason).filter(Boolean))].join('；')}`);
   }
+  if (structuralPlan) {
+    const moves = structuralPlan.modifications.flatMap((modification) => modification.movedWalls ?? []);
+    const areas = structuralPlan.modifications.flatMap((modification) => modification.roomAreaChanges ?? []);
+    console.log(`  结构方案: ${structuralPlan.id}，墙移动 ${moves.map((move) => `${Math.abs(move.distanceM).toFixed(2)}m`).join('、')}`);
+    console.log(`  房间面积变化: ${areas.map((area) => `${area.roomName} ${area.beforeM2.toFixed(2)}→${area.afterM2.toFixed(2)}㎡`).join('；')}`);
+    if (representativeNames.has(sample.name)) {
+      representativeResults.push(
+        `${sample.name}: ${analysis.overall}→${structuralPlan.predictedScore}，方案 ${structuralPlan.id}，` +
+        `${moves.map((move) => `${Math.abs(move.distanceM).toFixed(2)}m`).join('、')}，` +
+        `${areas.map((area) => `${area.roomName} ${area.beforeM2.toFixed(2)}→${area.afterM2.toFixed(2)}㎡`).join('；')}`,
+      );
+    }
+  }
 }
+
+console.log('\n=== 三个代表性墙体结构案例（内部共享墙已显式确认为 partition）===');
+for (const result of representativeResults) console.log(result);
 
 console.log('\n=== 性能测试结果 ===');
 const complex = complexPerformancePlan();

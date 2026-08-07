@@ -562,6 +562,14 @@ export const RULES: RuleDefinition[] = [
       if (options.length === 0) return [];
       options.sort((a, b) => b.span - a.span || a.group.length - b.group.length);
       const best = options[0];
+      const screens = ctx.byType('screen');
+      if (screens.length > 0) {
+        const endpoints = [...best.group].sort((a, b) => {
+          const spreadX = Math.max(...best.group.map((door) => door.x)) - Math.min(...best.group.map((door) => door.x));
+          return spreadX >= best.span ? a.x - b.x : a.y - b.y;
+        });
+        if (lineBlocked(center(endpoints[0]), center(endpoints[endpoints.length - 1]), screens)) return [];
+      }
       return [
         {
           elementIds: best.group.map((d) => d.id),

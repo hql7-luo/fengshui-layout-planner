@@ -31,12 +31,14 @@ interface PlanCanvasProps {
   elements: PlanElement[];
   issues: Issue[];
   selectedId: string | null;
+  selectedWallId: string | null;
   showIssues: boolean;
   zoom: number;
   layers: AllLayers | null;
   previewPlan: CandidatePlan | null;
   structure?: StructureModel;
   onSelect: (id: string | null) => void;
+  onWallSelect: (id: string) => void;
   onChange: (id: string, patch: Partial<PlanElement>) => void;
 }
 
@@ -70,12 +72,14 @@ export default function PlanCanvas({
   elements,
   issues,
   selectedId,
+  selectedWallId,
   showIssues,
   zoom,
   layers,
   previewPlan,
   structure,
   onSelect,
+  onWallSelect,
   onChange,
 }: PlanCanvasProps) {
   const containerRef = useRef<HTMLDivElement>(null);
@@ -154,7 +158,9 @@ export default function PlanCanvas({
         scaleX={scale}
         scaleY={scale}
         onMouseDown={(e) => {
-          if (e.target === e.target.getStage()) onSelect(null);
+          if (e.target === e.target.getStage()) {
+            onSelect(null);
+          }
         }}
         onTouchStart={(e) => {
           if (e.target === e.target.getStage()) onSelect(null);
@@ -228,6 +234,42 @@ export default function PlanCanvas({
               />
             ))}
 
+          {(structure?.walls ?? []).map((wall) => {
+            const selected = wall.id === selectedWallId;
+            const style = WALL_STYLES[wall.kind];
+            return (
+              <Group key={`structure-${wall.id}`}>
+                <Line
+                  points={[wall.x1, wall.y1, wall.x2, wall.y2]}
+                  stroke={style.stroke}
+                  strokeWidth={selected ? style.width + 2 : style.width}
+                  dash={style.dash ? [...style.dash] : undefined}
+                  opacity={selected ? 1 : 0.78}
+                  hitStrokeWidth={14}
+                  lineCap="round"
+                  onMouseDown={(event) => {
+                    event.cancelBubble = true;
+                    onWallSelect(wall.id);
+                  }}
+                  onTouchStart={(event) => {
+                    event.cancelBubble = true;
+                    onWallSelect(wall.id);
+                  }}
+                />
+                {selected ? (
+                  <Text
+                    x={(wall.x1 + wall.x2) / 2 + 6}
+                    y={(wall.y1 + wall.y2) / 2 - 18}
+                    text={WALL_LABELS[wall.kind]}
+                    fontSize={11}
+                    fill={style.stroke}
+                    listening={false}
+                  />
+                ) : null}
+              </Group>
+            );
+          })}
+
           <Transformer
             ref={transformerRef}
             rotateEnabled
@@ -276,6 +318,20 @@ export default function PlanCanvas({
   );
 }
 
+const WALL_STYLES = {
+  exterior: { stroke: '#26342f', width: 4, dash: undefined },
+  'load-bearing': { stroke: '#b8523f', width: 5, dash: undefined },
+  partition: { stroke: '#2f7a67', width: 3, dash: undefined },
+  unknown: { stroke: '#8a8f8c', width: 2.5, dash: [7, 5] },
+} as const;
+
+const WALL_LABELS = {
+  exterior: '外墙',
+  'load-bearing': '承重墙',
+  partition: '非承重墙',
+  unknown: '未知墙体',
+} as const;
+
 function CandidatePreviewLayer({
   plan,
   elements,
@@ -290,11 +346,66 @@ function CandidatePreviewLayer({
   const addedWalls = modifications.flatMap((modification) => modification.addedWalls ?? []);
   const addedElements = modifications.flatMap((modification) => modification.addedElements ?? []);
   const moves = modifications.flatMap((modification) => modification.movedElementIds ?? []);
+  const wallMoves = modifications.flatMap((modification) => modification.movedWalls ?? []);
+  const areaChanges = modifications.flatMap((modification) => modification.roomAreaChanges ?? []);
   const sealedIds = new Set(modifications.flatMap((modification) => modification.sealedDoorIds ?? []));
   const sealedDoors = (structure?.doors ?? []).filter((door) => sealedIds.has(door.id));
 
   return (
     <Layer listening={false} opacity={0.9}>
+      {wallMoves.map((move) => {
+        const strip = [
+          move.from[0].x, move.from[0].y,
+          move.from[1].x, move.from[1].y,
+          move.to[1].x, move.to[1].y,
+          move.to[0].x, move.to[0].y,
+        ];
+        const gains = areaChanges.filter((change) => change.deltaM2 > 0.001);
+        const losses = areaChanges.filter((change) => change.deltaM2 < -0.001);
+        const label = [...gains, ...losses]
+          .map((change) => `${change.roomName} ${change.deltaM2 >= 0 ? '+' : ''}${change.deltaM2.toFixed(2)}㎡`)
+          .join(' / ');
+        return (
+          <Group key={`wall-move-${move.wallId}`}>
+            {losses.length ? <Line points={strip} closed fill="#b8523f" opacity={0.18} /> : null}
+            {gains.length ? <Line points={strip} closed fill="#4f8f78" opacity={0.22} /> : null}
+            <Line
+              points={[move.from[0].x, move.from[0].y, move.from[1].x, move.from[1].y]}
+              stroke="#777d7a"
+              strokeWidth={3}
+              dash={[8, 6]}
+            />
+            <Line
+              points={[move.to[0].x, move.to[0].y, move.to[1].x, move.to[1].y]}
+              stroke="#176f59"
+              strokeWidth={5}
+              lineCap="round"
+            />
+            <Arrow
+              points={[
+                (move.from[0].x + move.from[1].x) / 2,
+                (move.from[0].y + move.from[1].y) / 2,
+                (move.to[0].x + move.to[1].x) / 2,
+                (move.to[0].y + move.to[1].y) / 2,
+              ]}
+              stroke="#176f59"
+              fill="#176f59"
+              strokeWidth={2}
+              pointerLength={8}
+              pointerWidth={8}
+            />
+            {label ? (
+              <Text
+                x={(move.to[0].x + move.to[1].x) / 2 + 8}
+                y={(move.to[0].y + move.to[1].y) / 2 + 8}
+                text={label}
+                fontSize={11}
+                fill="#26342f"
+              />
+            ) : null}
+          </Group>
+        );
+      })}
       {sealedDoors.map((door) => (
         <Group key={`sealed-${door.id}`} x={door.point.x} y={door.point.y}>
           <Line points={[-10, -10, 10, 10]} stroke="#b8523f" strokeWidth={3} />
@@ -373,12 +484,13 @@ function ElementNode({
   const w = element.width;
   const h = element.height;
   const showLabel = w > 44 && h > 22;
+  const polygonPoints = element.polygon?.flatMap((point) => [point.x - element.x, point.y - element.y]);
 
   return (
     <Group
       x={element.x}
       y={element.y}
-      rotation={element.rotation}
+      rotation={polygonPoints ? 0 : element.rotation}
       draggable
       ref={registerRef}
       onMouseDown={() => onSelect(element.id)}
@@ -388,18 +500,30 @@ function ElementNode({
       }
       onTransformEnd={() => onTransformEnd(element)}
     >
-      <Rect
-        x={-w / 2}
-        y={-h / 2}
-        width={w}
-        height={h}
-        fill={spec.color}
-        opacity={isRoom ? 0.62 : 0.95}
-        stroke={flagged ? '#b8523f' : spec.stroke}
-        strokeWidth={flagged ? 2.4 : isRoom ? 1.6 : 1.2}
-        dash={flagged ? [7, 4] : undefined}
-        cornerRadius={isRoom ? 3 : 2}
-      />
+      {polygonPoints ? (
+        <Line
+          points={polygonPoints}
+          closed
+          fill={spec.color}
+          opacity={0.62}
+          stroke={flagged ? '#b8523f' : spec.stroke}
+          strokeWidth={flagged ? 2.4 : 1.6}
+          dash={flagged ? [7, 4] : undefined}
+        />
+      ) : (
+        <Rect
+          x={-w / 2}
+          y={-h / 2}
+          width={w}
+          height={h}
+          fill={spec.color}
+          opacity={isRoom ? 0.62 : 0.95}
+          stroke={flagged ? '#b8523f' : spec.stroke}
+          strokeWidth={flagged ? 2.4 : isRoom ? 1.6 : 1.2}
+          dash={flagged ? [7, 4] : undefined}
+          cornerRadius={isRoom ? 3 : 2}
+        />
+      )}
       {spec.facing !== 'none' ? (
         <Arrow
           points={[0, 0, 0, Math.max(14, Math.min(h, 46) / 2 + 12)]}
@@ -423,7 +547,16 @@ function ElementNode({
           listening={false}
         />
       ) : null}
-      {selected ? (
+      {selected && polygonPoints ? (
+        <Line
+          points={polygonPoints}
+          closed
+          stroke="#2f5d50"
+          strokeWidth={1}
+          dash={[3, 3]}
+          listening={false}
+        />
+      ) : selected ? (
         <Rect
           x={-w / 2 - 3}
           y={-h / 2 - 3}

@@ -6,6 +6,7 @@ import { useProjectStore } from '@/store/project-store';
 import {
   DEFAULT_ACTIVE_LAYERS,
   normalizePersistedState,
+  migratePersistedState,
   type PersistedProjectState,
 } from '@/store/persistence';
 
@@ -69,7 +70,36 @@ describe('Project store · 场景与结构原子历史', () => {
     const structureBeforeEdit = structuredClone(project.scenarios.after.structure);
     const element = project.scenarios.after.elements[0];
     useProjectStore.getState().updateElement(element.id, { x: element.x + 5 });
-    expect(useProjectStore.getState().projects[id].scenarios.after.structure).toEqual(structureBeforeEdit);
+    const rebuilt = useProjectStore.getState().projects[id].scenarios.after.structure!;
+    expect(rebuilt).not.toEqual(structureBeforeEdit);
+    expect(rebuilt.walls.every((wall) => wall.kind === 'exterior' || wall.kind === 'unknown')).toBe(true);
+  });
+
+  it('墙体标记 → 真实移动候选 → 应用 → undo/redo 原子恢复 polygon、墙和门窗', () => {
+    const id = useProjectStore.getState().createSampleProject('entry-facing-bathroom')!;
+    const project = useProjectStore.getState().projects[id];
+    const shared = project.structure!.walls.find((wall) => wall.adjacentRooms[0] && wall.adjacentRooms[1])!;
+    expect(shared.kind).toBe('unknown');
+    useProjectStore.getState().setWallKind(shared.id, 'partition');
+    expect(useProjectStore.getState().projects[id].scenarios.before.structure?.walls.find((wall) => wall.id === shared.id)?.movable).toBe(true);
+
+    useProjectStore.getState().generateCandidates();
+    const plan = useProjectStore.getState().candidates!.plans.find((candidate) =>
+      candidate.feasible && candidate.modifications.some((modification) => modification.kind === 'move-wall'),
+    )!;
+    expect(plan).toBeTruthy();
+    const previousAfter = structuredClone(useProjectStore.getState().projects[id].scenarios.after);
+    useProjectStore.getState().applyCandidate(plan.id);
+    let after = useProjectStore.getState().projects[id].scenarios.after;
+    expect(after.elements.some((element) => element.polygon?.length)).toBe(true);
+    expect(after.structure).toEqual(plan.projectedStructure);
+
+    useProjectStore.getState().undo();
+    expect(useProjectStore.getState().projects[id].scenarios.after).toEqual(previousAfter);
+    useProjectStore.getState().redo();
+    after = useProjectStore.getState().projects[id].scenarios.after;
+    expect(after.structure).toEqual(plan.projectedStructure);
+    expect(after.elements).toEqual(plan.projectedElements);
   });
 
   it('户型编辑后清除陈旧候选，避免应用旧预测', () => {
@@ -82,7 +112,7 @@ describe('Project store · 场景与结构原子历史', () => {
   });
 });
 
-describe('Project store · localStorage schema v2', () => {
+describe('Project store · localStorage schema v3', () => {
   beforeEach(resetStore);
 
   it('持久化当前场景、候选、图层开关与透明度', () => {
@@ -152,5 +182,25 @@ describe('Project store · localStorage schema v2', () => {
     expect(restored.projects[id].scenarios.before.elements.length).toBeGreaterThan(0);
     expect(restored.candidates).toBeNull();
     expect(restored.previewPlanId).toBeNull();
+  });
+
+  it('v2 自动推导的 partition 安全迁移为 unknown，并丢弃旧候选等待重算', () => {
+    const project = createProjectFromSample('entry-facing-bathroom', 456)!;
+    const legacyStructure = {
+      ...project.structure!,
+      walls: project.structure!.walls.map((wall) => wall.kind === 'unknown'
+        ? { ...wall, kind: 'partition' as const, movable: true }
+        : wall),
+    };
+    const migrated = migratePersistedState({
+      projects: { [project.id]: { ...project, structure: legacyStructure } },
+      order: [project.id],
+      currentId: project.id,
+      scenario: 'before',
+      candidates: { plans: [] },
+    }, 2);
+    expect(migrated.projects[project.id].structure?.walls.some((wall) => wall.kind === 'unknown')).toBe(true);
+    expect(migrated.projects[project.id].structure?.walls.some((wall) => wall.kind === 'partition')).toBe(false);
+    expect(migrated.candidates).toBeNull();
   });
 });

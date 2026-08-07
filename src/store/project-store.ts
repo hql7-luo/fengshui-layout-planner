@@ -4,7 +4,7 @@ import { create } from 'zustand';
 import { createJSONStorage, persist } from 'zustand/middleware';
 import { ELEMENT_SPECS } from '@/lib/element-catalog';
 import { createProjectFromSample, SAMPLE_CANVAS, SAMPLE_PIXELS_PER_METER } from '@/lib/samples';
-import { normalizeDeg } from '@/lib/geometry';
+import { normalizeDeg, rotateVec } from '@/lib/geometry';
 import { applyAllFixesToElements } from '@/lib/apply-fixes';
 import { issueIdentity } from '@/lib/issue-diff';
 import { generateCandidatePlans, buildStructureFromElements } from '@/lib/optimizer';
@@ -14,6 +14,7 @@ import { analyzePlan, type ContextOptions } from '@/lib/rules/engine';
 import {
   DEFAULT_ACTIVE_LAYERS,
   normalizePersistedState,
+  migratePersistedState,
   STORAGE_KEY,
   STORAGE_VERSION,
 } from '@/store/persistence';
@@ -29,6 +30,7 @@ import type {
   ScenarioKey,
   StructureModel,
   Wall,
+  WallKind,
 } from '@/lib/types';
 
 const HISTORY_LIMIT = 50;
@@ -85,6 +87,8 @@ export interface ProjectState {
   removeWall: (id: string) => void;
   /** 标记是否已识别承重墙 */
   setLoadBearingMarked: (marked: boolean) => void;
+  /** 用户明确设置单段墙属性；只有 partition 会变为可移动 */
+  setWallKind: (id: string, kind: WallKind) => void;
   /** 当前候选方案与预览状态 */
   candidates: OptimizationResult | null;
   previewPlanId: string | null;
@@ -147,9 +151,30 @@ function cloneStructure(structure: StructureModel | undefined): StructureModel |
 
 function cloneScenario(scenario: Scenario): Scenario {
   return {
-    elements: scenario.elements.map((element) => ({ ...element })),
+    elements: scenario.elements.map((element) => ({
+      ...element,
+      polygon: element.polygon?.map((point) => ({ ...point })),
+    })),
     structure: cloneStructure(scenario.structure),
   };
+}
+
+function patchElementGeometry(element: PlanElement, patch: Partial<PlanElement>): PlanElement {
+  const next = { ...element, ...patch, id: element.id };
+  if (patch.polygon) return { ...next, polygon: patch.polygon.map((point) => ({ ...point })) };
+  if (!element.polygon || !['x', 'y', 'width', 'height', 'rotation'].some((key) => key in patch)) return next;
+  const scaleX = next.width / Math.max(1e-6, element.width);
+  const scaleY = next.height / Math.max(1e-6, element.height);
+  const rotationDelta = next.rotation - element.rotation;
+  const polygon = element.polygon.map((point) => {
+    const scaled = {
+      x: (point.x - element.x) * scaleX,
+      y: (point.y - element.y) * scaleY,
+    };
+    const rotated = rotateVec(scaled, rotationDelta);
+    return { x: next.x + rotated.x, y: next.y + rotated.y };
+  });
+  return { ...next, polygon };
 }
 
 const noopStorage = {
@@ -569,7 +594,10 @@ export const useProjectStore = create<ProjectState>()(
                 scenarios: {
                   before: cloneScenario(project.scenarios.before),
                   after: {
-                    elements: plan.projectedElements.map((e) => ({ ...e })),
+                    elements: plan.projectedElements.map((e) => ({
+                      ...e,
+                      polygon: e.polygon?.map((point) => ({ ...point })),
+                    })),
                     structure: cloneStructure(plan.projectedStructure),
                   },
                 },
@@ -650,6 +678,37 @@ export const useProjectStore = create<ProjectState>()(
             };
           }, { recordHistory: true }),
 
+        setWallKind: (wallId, kind) =>
+          mutate((project) => {
+            const scenario = get().scenario;
+            const elements = project.scenarios[scenario].elements;
+            const base = project.scenarios[scenario].structure ??
+              project.structure ??
+              buildStructureFromElements(elements, false, project.pixelsPerMeter);
+            const exists = base.walls.some((wall) => wall.id === wallId);
+            if (!exists) return project;
+            const walls = base.walls.map((wall) => wall.id === wallId
+              ? { ...wall, kind, movable: kind === 'partition' }
+              : { ...wall });
+            const doors = base.doors.map((door) => ({
+              ...door,
+              movable: door.kind !== 'entry' && walls.find((wall) => wall.id === door.wallId)?.kind === 'partition',
+            }));
+            const structure: StructureModel = {
+              ...base,
+              walls,
+              doors,
+              loadBearingMarked: base.loadBearingMarked || kind === 'load-bearing' || kind === 'partition',
+            };
+            return {
+              ...project,
+              scenarios: {
+                ...project.scenarios,
+                [scenario]: { ...project.scenarios[scenario], structure },
+              },
+            };
+          }, { recordHistory: true }),
+
         addElement: (type, position) => {
           const state = get();
           const project = state.currentId ? state.projects[state.currentId] : null;
@@ -677,8 +736,26 @@ export const useProjectStore = create<ProjectState>()(
           const project = state.currentId ? state.projects[state.currentId] : null;
           if (!project) return;
           const current = project.scenarios[state.scenario].elements;
-          const next = current.map((el) => (el.id === id ? { ...el, ...patch, id: el.id } : el));
-          setElements(next, options?.commit !== false);
+          const original = current.find((element) => element.id === id);
+          if (!original) return;
+          const next = current.map((element) => element.id === id ? patchElementGeometry(element, patch) : element);
+          const roomGeometryChanged = ELEMENT_SPECS[original.type].category === 'room' &&
+            ['x', 'y', 'width', 'height', 'rotation', 'polygon'].some((key) => key in patch);
+          if (!roomGeometryChanged) {
+            setElements(next, options?.commit !== false);
+            return;
+          }
+          mutate((currentProject) => ({
+            ...currentProject,
+            scenarios: {
+              ...currentProject.scenarios,
+              [state.scenario]: {
+                elements: next,
+                // 房间几何发生人工变换后旧墙拓扑已失效，安全重建为 unknown，等待用户重新确认属性。
+                structure: buildStructureFromElements(next, false, currentProject.pixelsPerMeter),
+              },
+            },
+          }), { recordHistory: options?.commit !== false });
         },
 
         removeElement: (id) => {
@@ -767,8 +844,7 @@ export const useProjectStore = create<ProjectState>()(
       storage: createJSONStorage(() =>
         typeof window === 'undefined' ? noopStorage : window.localStorage,
       ),
-      migrate: (persistedState, storedVersion) =>
-        normalizePersistedState(persistedState, storedVersion >= STORAGE_VERSION),
+      migrate: (persistedState, storedVersion) => migratePersistedState(persistedState, storedVersion),
       merge: (persistedState, currentState) => ({
         ...currentState,
         ...normalizePersistedState(persistedState, true),

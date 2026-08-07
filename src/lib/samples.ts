@@ -45,12 +45,13 @@ const sampleA: SampleDefinition = {
     { type: 'dining_room', name: '餐厅', x: 7.1, y: 1.5, w: 1.8, h: 3.0 },
     { type: 'master_bedroom', name: '主卧', x: 10.1, y: 2.0, w: 3.8, h: 4.0 },
     { type: 'living_room', name: '客厅', x: 1.85, y: 7.0, w: 3.7, h: 4.0 },
-    { type: 'bathroom', name: '卫生间', x: 5.0, y: 7.0, w: 2.2, h: 1.8 },
+    // 卫生间左侧与客厅共享一段墙，供用户标记为 partition 后演示真实墙体平移。
+    { type: 'bathroom', name: '卫生间', x: 4.8, y: 7.0, w: 2.2, h: 1.8 },
     { type: 'kitchen', name: '厨房', x: 8.8, y: 7.5, w: 2.8, h: 3.0 },
     { type: 'balcony', name: '生活阳台', x: 11.2, y: 7.5, w: 1.6, h: 3.0 },
 
-    { type: 'entry_door', name: '入户门', x: 5.0, y: 9.0, r: 180 },
-    { type: 'room_door', name: '卫生间门', x: 5.0, y: 7.85, r: 0 },
+    { type: 'entry_door', name: '入户门', x: 4.8, y: 9.0, r: 180 },
+    { type: 'room_door', name: '卫生间门', x: 4.8, y: 7.85, r: 0 },
     { type: 'room_door', name: '主卧门', x: 8.35, y: 2.0, r: 90 },
     { type: 'room_door', name: '次卧门', x: 1.7, y: 3.5, r: 0 },
     { type: 'room_door', name: '书房门', x: 4.8, y: 2.9, r: 0 },
@@ -80,7 +81,7 @@ const sampleB: SampleDefinition = {
     { type: 'second_bedroom', name: '次卧', x: 9.6, y: 6.9, w: 4.6, h: 4.0 },
     { type: 'living_room', name: '客厅', x: 2.5, y: 6.9, w: 4.8, h: 4.0 },
     { type: 'bathroom', name: '卫生间', x: 6.0, y: 4.5, w: 2.2, h: 2.0 },
-    { type: 'kitchen', name: '厨房', x: 6.0, y: 7.0, w: 2.6, h: 2.4 },
+    { type: 'kitchen', name: '厨房', x: 6.1, y: 7.0, w: 2.4, h: 2.4 },
     { type: 'balcony', name: '阳台', x: 6.0, y: 0.9, w: 2.4, h: 1.4 },
 
     { type: 'entry_door', name: '入户门', x: 2.5, y: 9.0, r: 180 },

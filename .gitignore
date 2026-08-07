@@ -16,6 +16,7 @@
 /playwright-report
 /tests/screenshots/*
 !/tests/screenshots/*-final.png
+!/tests/screenshots/*-wall-preview.png
 
 # next.js
 /.next/

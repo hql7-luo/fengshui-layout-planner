@@ -275,7 +275,7 @@ describe('结构方案真实性 · 方案 B/C 检查', () => {
     }
   });
 
-  it('不移动房间矩形（只移门洞/加隔断，不改变房间尺寸位置）', () => {
+  it('只有真实 move-wall 方案会改变房间 polygon，其他方案保持房间几何不变', () => {
     for (const id of ['entry-facing-bathroom', 'bathroom-in-center', 'bed-facing-door']) {
       const els = sampleElements(id);
       const res = generateCandidatePlans({
@@ -288,15 +288,21 @@ describe('结构方案真实性 · 方案 B/C 检查', () => {
         const projectedRooms = plan.projectedElements.filter((e) => ELEMENT_SPECS[e.type]?.category === 'room');
         // 房间数量不变
         expect(projectedRooms.length).toBe(originalRooms.length);
-        // 每个原房间的位置和尺寸不变
+        const movesWall = plan.modifications.some((modification) => modification.kind === 'move-wall');
         for (const origRoom of originalRooms) {
           const projRoom = projectedRooms.find((r) => r.id === origRoom.id);
           expect(projRoom).toBeTruthy();
           if (projRoom) {
-            expect(projRoom.x).toBeCloseTo(origRoom.x, 5);
-            expect(projRoom.y).toBeCloseTo(origRoom.y, 5);
-            expect(projRoom.width).toBeCloseTo(origRoom.width, 5);
-            expect(projRoom.height).toBeCloseTo(origRoom.height, 5);
+            if (movesWall && plan.modifications.some((modification) =>
+              modification.roomAreaChanges?.some((change) => change.roomId === origRoom.id)
+            )) {
+              expect(projRoom.polygon?.length).toBeGreaterThanOrEqual(4);
+            } else {
+              expect(projRoom.x).toBeCloseTo(origRoom.x, 5);
+              expect(projRoom.y).toBeCloseTo(origRoom.y, 5);
+              expect(projRoom.width).toBeCloseTo(origRoom.width, 5);
+              expect(projRoom.height).toBeCloseTo(origRoom.height, 5);
+            }
           }
         }
       }

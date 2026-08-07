@@ -39,8 +39,13 @@ function optimizedAfter(project: Project): { before: PlanElement[]; after: PlanE
   const before = project.scenarios.before.elements;
   const structure = buildStructureFromElements(before, true, project.pixelsPerMeter);
   const result = generateCandidatePlans({ elements: before, structure, options: optionsOf(project) });
-  const plan = [...result.plans].sort(
-    (a, b) => b.solvedIssueKeys.length - a.solvedIssueKeys.length,
+  const conflictCount = (elements: PlanElement[]) => {
+    const input = buildInput(elements, project);
+    return computeLayers(input, ['privacy']).privacy.regions.filter((region) => region.kind === 'conflict').length;
+  };
+  const plan = result.plans.filter((candidate) => candidate.feasible).sort(
+    (a, b) => conflictCount(a.projectedElements) - conflictCount(b.projectedElements) ||
+      b.solvedIssueKeys.length - a.solvedIssueKeys.length,
   )[0];
   return { before, after: plan.projectedElements, solved: plan.solvedIssueKeys.length };
 }
