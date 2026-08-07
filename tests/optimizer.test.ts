@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest';
 import { ELEMENT_SPECS } from '@/lib/element-catalog';
-import { buildStructureFromElements, generateCandidatePlans } from '@/lib/optimizer';
+import { buildStructureFromElements, generateCandidatePlans, isPointOnWall } from '@/lib/optimizer';
 import { analyzePlan } from '@/lib/rules/engine';
 import { SAMPLE_PIXELS_PER_METER, SAMPLES, sampleElements } from '@/lib/samples';
 import { roomsConnected, roomsOverlap } from '@/lib/geometry';
@@ -74,6 +74,25 @@ describe('结构优化器 · 数据结构与结构模型', () => {
     expect(s.doors.some((d) => d.kind === 'bathroom')).toBe(true);
     expect(s.windows.length).toBeGreaterThan(0);
     expect(s.zones.some((z) => z.kind === 'wet' && z.movable === false)).toBe(true);
+    for (const door of s.doors) {
+      const wall = s.walls.find((item) => item.id === door.wallId);
+      expect(wall).toBeTruthy();
+      expect(wall && isPointOnWall(door.point, wall, 0.01)).toBe(true);
+    }
+  });
+
+  it('凹形户型的入户门可依附房间外边线，不要求位于整体包围盒四边', () => {
+    const rooms = [
+      m('study', 2, 6, { w: 2, h: 2 }),
+      m('living_room', 7, 2, { w: 4, h: 4 }),
+    ];
+    const entry = m('entry_door', 3, 6, { r: 90 });
+    const structure = buildStructureFromElements([...rooms, entry], false, PPM);
+    const opening = structure.doors.find((door) => door.linkedElementId === entry.id)!;
+    const wall = structure.walls.find((candidate) => candidate.id === opening.wallId);
+    expect(wall).toBeTruthy();
+    expect(isPointOnWall(opening.point, wall!)).toBe(true);
+    expect(opening.movable).toBe(false);
   });
 });
 
@@ -259,6 +278,29 @@ describe('验收 ⑩⑪ · 应用效果与撤销', () => {
     const plan = res.plans.find((p) => p.feasible)!;
     plan.projectedElements[0].x = -9999;
     expect(els).toEqual(before);
+  });
+
+  it('移位门洞在同一真实墙段创建新 opening，旧 opening 移除且墙段连续保留', () => {
+    const els = entryFacingBathroom();
+    const structure = buildStructureFromElements(els, true, PPM);
+    const result = run(els, structure);
+    const plan = result.plans.find((candidate) =>
+      candidate.feasible && candidate.modifications.some((modification) => modification.sealedDoorIds?.length),
+    );
+    expect(plan).toBeTruthy();
+    for (const modification of plan?.modifications ?? []) {
+      for (const sealedId of modification.sealedDoorIds ?? []) {
+        const original = structure.doors.find((door) => door.id === sealedId)!;
+        const relocated = plan!.projectedStructure.doors.find(
+          (door) => door.linkedElementId === original.linkedElementId,
+        );
+        expect(relocated?.id).not.toBe(sealedId);
+        expect(relocated?.wallId).toBe(original.wallId);
+        const wall = plan!.projectedStructure.walls.find((item) => item.id === original.wallId)!;
+        expect(isPointOnWall(relocated!.point, wall, 0.01)).toBe(true);
+        expect(plan!.projectedStructure.walls.filter((item) => item.id === original.wallId)).toHaveLength(1);
+      }
+    }
   });
 });
 

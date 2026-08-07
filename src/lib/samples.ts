@@ -190,7 +190,8 @@ export function createProjectFromSample(id: string, timestamp = Date.now()): Pro
       before: { elements },
       after: { elements: elements.map((el) => ({ ...el })) },
     },
-    structure: buildStructureFromElements(elements, true, SAMPLE_PIXELS_PER_METER),
+    // 示例只提供几何标注，并没有真实承重墙识别结果；结构候选必须保持“概念方案”。
+    structure: buildStructureFromElements(elements, false, SAMPLE_PIXELS_PER_METER),
     sampleId: sample.id,
   };
 }

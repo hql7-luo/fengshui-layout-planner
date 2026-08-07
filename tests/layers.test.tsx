@@ -1,5 +1,5 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
-import { cleanup, render, screen, waitFor } from '@testing-library/react';
+import { cleanup, fireEvent, render, screen, waitFor } from '@testing-library/react';
 import { analyzePlan } from '@/lib/rules/engine';
 import { createProjectFromSample } from '@/lib/samples';
 import { buildStructureFromElements, generateCandidatePlans } from '@/lib/optimizer';
@@ -61,7 +61,7 @@ function roomsOnly(elements: PlanElement[]): PlanElement[] {
 }
 
 beforeEach(() => {
-  // 图层开关/透明度不持久化（partialize 未包含），但用例间仍重置为全关以隔离状态
+  // 用例间重置为全关以隔离状态。
   useProjectStore.setState({ activeLayers: { ...ALL_OFF }, layerOpacity: 0.55, selectedRegion: null });
 });
 
@@ -192,6 +192,47 @@ describe('分析图层 · 不修改原始元素', () => {
   });
 });
 
+describe('分析图层 · 性能上限与按需计算', () => {
+  it('4000×4000 画布的能量网格不超过 2500 个单元', () => {
+    const room: PlanElement = {
+      id: 'large-room',
+      type: 'living_room',
+      name: '大空间',
+      x: 2000,
+      y: 2000,
+      width: 4000,
+      height: 4000,
+      rotation: 0,
+    };
+    const options = { pixelsPerMeter: 20, northAngle: 0, canvas: { width: 4000, height: 4000 } };
+    const layers = computeLayers(
+      { elements: [room], analysis: analyzePlan([room], options), options },
+      ['energy'],
+    );
+    expect(layers.energy.regions.length).toBeLessThanOrEqual(2500);
+    expect(layers.energy.regions[0].basis).toContain('传统文化可视化模型，非物理能量测量');
+  });
+
+  it('编辑器可只计算已开启图层，未开启的重图层不生成网格', () => {
+    const project = createProjectFromSample(SAMPLE_ID)!;
+    const layers = computeLayers(buildInput(project.scenarios.before.elements, project), ['privacy']);
+    expect(layers.privacy.sufficient).toBe(true);
+    expect(layers.energy.regions).toHaveLength(0);
+    expect(layers.energy.insufficiencyReason).toBe('图层尚未开启');
+  });
+});
+
+describe('图层控制面板 · 路径依据', () => {
+  it('气流/动线等 line 图层也能在面板查看计算依据', () => {
+    const project = createProjectFromSample(SAMPLE_ID)!;
+    useProjectStore.setState({ activeLayers: { ...ALL_OFF, airflow: true } });
+    render(<LayerPanel layers={computeLayers(buildInput(project.scenarios.before.elements, project))} />);
+    fireEvent.click(screen.getByText(/查看计算依据/));
+    fireEvent.click(screen.getAllByRole('button', { name: /窗进气|入户气流/ })[0]);
+    expect(screen.getByText(/为气口，气流沿其朝向进入室内/)).toBeInTheDocument();
+  });
+});
+
 describe('图层控制面板 · 移动端默认折叠', () => {
   beforeEach(() => {
     // jsdom 不实现 matchMedia，mock 为移动端（max-width:768px 命中）
@@ -218,5 +259,8 @@ describe('图层控制面板 · 移动端默认折叠', () => {
       const btn = screen.getByRole('button', { name: '展开' });
       expect(btn).toBeInTheDocument();
     });
+    fireEvent.click(screen.getByRole('button', { name: '展开' }));
+    expect(screen.getByRole('button', { name: '收起' })).toBeInTheDocument();
+    expect(screen.getByRole('checkbox', { name: /风水问题热力图/ })).toBeVisible();
   });
 });

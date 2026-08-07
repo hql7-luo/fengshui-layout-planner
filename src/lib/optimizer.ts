@@ -1,5 +1,6 @@
 import { analyzePlan, type ContextOptions } from './rules/engine';
 import { applyAllFixesToElements } from './apply-fixes';
+import { issueDigest, issueIdentity } from './issue-diff';
 import { SCORE_CAP_HIGH } from './scoring';
 import type {
   CandidatePlan,
@@ -16,6 +17,7 @@ import {
   aabb,
   center,
   clamp,
+  corners,
   midpoint,
   normalize,
   roomOfDoor,
@@ -30,7 +32,7 @@ import { ELEMENT_SPECS } from './element-catalog';
  * 结构优化器（纯函数、确定性）。
  *
  * 输入当前场景的元素与结构模型，针对检测到的结构问题（入户对卫生间 / 门对门 /
- * 长走廊）生成 A（最小改动）、B（综合平衡）、C（评分最高）三套候选方案。
+ * 长走廊）生成 A（最小改动）、B（综合平衡）、C（结构综合调整）三套候选方案。
  *
  * 每套方案都：
  * 1. 在家具自动优化基础上叠加结构改动（改门洞 / 移门 / 加玄关短墙）；
@@ -45,8 +47,7 @@ const COST_MOVE = 2;
 const COST_SCREEN = 3;
 const COST_WALL = 4;
 const DOOR_ROOM_TOL_M = 0.45; // 米：门洞压在墙线上时归属房间的容差
-const MIN_ROOM_HALF = 0.4; // 米：门洞可移位所需的最小房间半宽
-const MIN_SCREEN_ROOM_M = 1.4; // 米：可安全设置玄关屏风的最小房间短边 // 米：房间半宽小于此值无法移位门洞
+const MIN_SCREEN_AXIS_M = 1.4; // 米：入户门与目标过近时不放置屏风，避免堵住门口
 
 type ProblemType = CandidatePlan['problemType'];
 
@@ -79,6 +80,37 @@ function unionRoomBounds(elements: PlanElement[]): { x: number; y: number; width
   return { x: minX, y: minY, width: maxX - minX, height: maxY - minY };
 }
 
+function projectPointToWall(point: Point, wall: Wall): { point: Point; t: number; distance: number } {
+  const vx = wall.x2 - wall.x1;
+  const vy = wall.y2 - wall.y1;
+  const lengthSquared = vx * vx + vy * vy;
+  const rawT = lengthSquared === 0 ? 0 : ((point.x - wall.x1) * vx + (point.y - wall.y1) * vy) / lengthSquared;
+  const t = clamp(rawT, 0, 1);
+  const projected = { x: wall.x1 + vx * t, y: wall.y1 + vy * t };
+  return {
+    point: projected,
+    t,
+    distance: Math.hypot(point.x - projected.x, point.y - projected.y),
+  };
+}
+
+export function isPointOnWall(point: Point, wall: Wall, tolerancePx = 1): boolean {
+  return projectPointToWall(point, wall).distance <= tolerancePx;
+}
+
+function nearestWall(
+  point: Point,
+  walls: Wall[],
+  allowedKinds: Wall['kind'][],
+  tolerancePx: number,
+): Wall | undefined {
+  return walls
+    .filter((wall) => allowedKinds.includes(wall.kind))
+    .map((wall) => ({ wall, distance: projectPointToWall(point, wall).distance }))
+    .filter((item) => item.distance <= tolerancePx)
+    .sort((a, b) => a.distance - b.distance || a.wall.id.localeCompare(b.wall.id))[0]?.wall;
+}
+
 /** 由元素推导一个结构模型（用于没有手动绘制墙体时的示意结构） */
 export function buildStructureFromElements(
   elements: PlanElement[],
@@ -94,20 +126,65 @@ export function buildStructureFromElements(
     { id: 'ext-right', kind: 'exterior', x1: bounds.x + bounds.width, y1: bounds.y, x2: bounds.x + bounds.width, y2: bounds.y + bounds.height, thicknessM: t, movable: false, adjacentRooms: [null, null], hasDoor: false, hasWindow: false },
   ];
 
+  const rooms = elements.filter((e) => ELEMENT_SPECS[e.type]?.category === 'room');
+  for (const room of rooms) {
+    const [topLeft, topRight, bottomRight, bottomLeft] = corners(room);
+    const edges: Array<[string, number, number, number, number]> = [
+      ['top', topLeft.x, topLeft.y, topRight.x, topRight.y],
+      ['right', topRight.x, topRight.y, bottomRight.x, bottomRight.y],
+      ['bottom', bottomRight.x, bottomRight.y, bottomLeft.x, bottomLeft.y],
+      ['left', bottomLeft.x, bottomLeft.y, topLeft.x, topLeft.y],
+    ];
+    for (const [side, x1, y1, x2, y2] of edges) {
+      walls.push({
+        id: `room-${room.id}-${side}`,
+        kind: 'partition',
+        x1,
+        y1,
+        x2,
+        y2,
+        thicknessM: 0.12,
+        movable: true,
+        adjacentRooms: [room.id, null],
+        hasDoor: false,
+        hasWindow: false,
+      });
+    }
+  }
+
   const doors: DoorOpening[] = [];
   for (const el of elements) {
     if (el.type === 'entry_door') {
-      doors.push({ id: `do-${el.id}`, wallId: 'ext-bottom', point: center(el), widthM: el.width / ppm, kind: 'entry', linkedElementId: el.id, movable: false });
+      // 凹形户型的真实外边界不一定落在整体包围盒四边；匹配最近房间边线，
+      // 再由 opening.movable=false 保证入户门不会被自动调整。
+      const wall = nearestWall(center(el), walls, ['exterior', 'partition'], DOOR_ROOM_TOL_M * ppm);
+      doors.push({ id: `do-${el.id}`, wallId: wall?.id ?? `unassigned-${el.id}`, point: wall ? projectPointToWall(center(el), wall).point : center(el), widthM: el.width / ppm, kind: 'entry', linkedElementId: el.id, movable: false });
     } else if (el.type === 'room_door') {
-      const room = roomOfDoor(elements.filter((r) => ELEMENT_SPECS[r.type]?.category === 'room'), el, DOOR_ROOM_TOL_M * ppm);
+      const room = roomOfDoor(rooms, el, DOOR_ROOM_TOL_M * ppm);
       const kind: DoorOpening['kind'] = room?.type === 'bathroom' ? 'bathroom' : room?.type === 'kitchen' ? 'kitchen' : room?.type === 'balcony' ? 'balcony' : 'room';
-      doors.push({ id: `do-${el.id}`, wallId: 'inner', point: center(el), widthM: el.width / ppm, kind, linkedElementId: el.id, movable: true });
+      const roomWalls = room
+        ? walls.filter((wall) => wall.adjacentRooms.includes(room.id))
+        : walls.filter((wall) => wall.kind === 'partition');
+      const wall = nearestWall(center(el), roomWalls, ['partition'], DOOR_ROOM_TOL_M * ppm);
+      doors.push({ id: `do-${el.id}`, wallId: wall?.id ?? `unassigned-${el.id}`, point: wall ? projectPointToWall(center(el), wall).point : center(el), widthM: el.width / ppm, kind, linkedElementId: el.id, movable: Boolean(wall) });
     }
   }
 
   const windows = elements
     .filter((el) => el.type === 'window')
-    .map((el) => ({ id: `wo-${el.id}`, wallId: 'inner', point: center(el), widthM: el.width / ppm }));
+    .map((el) => {
+      const wall = nearestWall(center(el), walls, ['exterior', 'partition'], DOOR_ROOM_TOL_M * ppm);
+      return { id: `wo-${el.id}`, wallId: wall?.id ?? `unassigned-${el.id}`, point: wall ? projectPointToWall(center(el), wall).point : center(el), widthM: el.width / ppm };
+    });
+
+  for (const door of doors) {
+    const wall = walls.find((item) => item.id === door.wallId);
+    if (wall) wall.hasDoor = true;
+  }
+  for (const window of windows) {
+    const wall = walls.find((item) => item.id === window.wallId);
+    if (wall) wall.hasWindow = true;
+  }
 
   const zones = elements
     .filter((el) => el.type === 'bathroom' || el.type === 'kitchen')
@@ -117,18 +194,6 @@ export function buildStructureFromElements(
     });
 
   return { walls, doors, windows, zones, loadBearingMarked };
-}
-
-/** 门洞位于房间内部或压在其墙线上（带容差） */
-function containsCenter(room: PlanElement, el: PlanElement, tolPx = DOOR_ROOM_TOL_M * 75): boolean {
-  const b = aabb(room);
-  const c = center(el);
-  return (
-    c.x >= b.x - tolPx &&
-    c.x <= b.x + b.width + tolPx &&
-    c.y >= b.y - tolPx &&
-    c.y <= b.y + b.height + tolPx
-  );
 }
 
 function cloneStructure(s: StructureModel): StructureModel {
@@ -179,29 +244,38 @@ function makeScreen(a: Point, b: Point, idSeed: string, ppm: number): { element:
   return { element, wall };
 }
 
-/** 把门洞沿垂直方向移位 meters 米，并约束在所在房间内部 */
-function shiftDoorInRoom(
+/** 把门洞沿其真实依附墙段移位，并为失败返回可展示的具体原因。 */
+function shiftDoorOnWall(
   door: PlanElement,
-  room: PlanElement | undefined,
-  perp: Point,
+  structure: StructureModel,
   meters: number,
   ppm: number,
-): { x: number; y: number } | null {
-  const from = center(door);
-  let next = { x: from.x + perp.x * meters * ppm, y: from.y + perp.y * meters * ppm };
-  if (room) {
-    const b = aabb(room);
-    const inset = 0.25 * ppm;
-    next = {
-      x: clamp(next.x, b.x + inset, b.x + b.width - inset),
-      y: clamp(next.y, b.y + inset, b.y + b.height - inset),
-    };
-    // 房间需足够宽以容纳移位
-    const halfW = Math.min(b.width, b.height) / 2;
-    if (halfW < MIN_ROOM_HALF * ppm + door.width / 2) return null;
+): { position?: { x: number; y: number }; reason?: string } {
+  const opening = structure.doors.find((item) => item.linkedElementId === door.id);
+  if (!opening) return { reason: `门洞「${door.name}」缺少结构关联` };
+  const wall = structure.walls.find((item) => item.id === opening.wallId);
+  if (!wall) return { reason: `门洞「${door.name}」未依附有效墙体` };
+  if (!opening.movable || !wall.movable || wall.kind !== 'partition') {
+    return { reason: `门洞「${door.name}」所在墙体不可移动或不是非承重隔墙` };
   }
-  if (Math.abs(next.x - from.x) < 1 && Math.abs(next.y - from.y) < 1) return null;
-  return next;
+
+  const lengthPx = Math.hypot(wall.x2 - wall.x1, wall.y2 - wall.y1);
+  const endClearance = door.width / 2 + 0.15 * ppm;
+  if (lengthPx <= endClearance * 2 + Math.abs(meters) * ppm) {
+    return { reason: `门洞「${door.name}」所在墙段长度不足，无法保留洞口与墙端安全距离` };
+  }
+
+  const projection = projectPointToWall(opening.point, wall);
+  const minT = endClearance / lengthPx;
+  const nextT = clamp(projection.t + (meters * ppm) / lengthPx, minT, 1 - minT);
+  const next = {
+    x: wall.x1 + (wall.x2 - wall.x1) * nextT,
+    y: wall.y1 + (wall.y2 - wall.y1) * nextT,
+  };
+  if (Math.hypot(next.x - opening.point.x, next.y - opening.point.y) < 0.25 * ppm) {
+    return { reason: `门洞「${door.name}」靠近墙端，没有足够墙面完成有效错位` };
+  }
+  return { position: next };
 }
 
 /* ------------------------------------------------------------------ */
@@ -234,6 +308,7 @@ function applyElements(base: PlanElement[], mods: PlanModification[]): PlanEleme
 
 function applyStructure(structure: StructureModel, mods: PlanModification[]): StructureModel {
   const next = cloneStructure(structure);
+  const originalDoors = structure.doors.map((door) => ({ ...door }));
   // 收集所有被封堵的门洞 ID
   const sealedIds = new Set<string>();
   for (const mod of mods) {
@@ -243,19 +318,23 @@ function applyStructure(structure: StructureModel, mods: PlanModification[]): St
     }
     if (mod.addedWalls) next.walls = [...next.walls, ...mod.addedWalls.map((w) => ({ ...w }))];
   }
-  // 同步门洞元素移位到结构模型；被封堵的门用新 ID 创建（旧门洞已封闭）
+  // 同步门洞元素移位到结构模型；墙体本身保持连续，旧 opening 移除后在同一墙段创建新 opening。
   for (const mod of mods) {
     if (mod.movedElementIds) {
       for (const mv of mod.movedElementIds) {
         const oldDoorId = `do-${mv.id}`;
         const wasSealed = sealedIds.has(oldDoorId);
         if (wasSealed) {
-          // 旧门洞已封堵，在新位置创建新门洞
-          next.doors.push({ id: `${oldDoorId}-relocated`, wallId: 'inner', point: { x: mv.x, y: mv.y }, widthM: 0.9, kind: 'room', linkedElementId: mv.id, movable: true });
+          const original = originalDoors.find((door) => door.id === oldDoorId || door.linkedElementId === mv.id);
+          if (!original) continue;
+          next.doors.push({
+            ...original,
+            id: `${oldDoorId}-relocated`,
+            point: { x: mv.x, y: mv.y },
+          });
         } else {
           const opening = next.doors.find((d) => d.linkedElementId === mv.id);
           if (opening) opening.point = { x: mv.x, y: mv.y };
-          else next.doors.push({ id: oldDoorId, wallId: 'inner', point: { x: mv.x, y: mv.y }, widthM: 0.9, kind: 'room', linkedElementId: mv.id, movable: true });
         }
       }
     }
@@ -269,6 +348,7 @@ function validatePlan(
   originalStructure: StructureModel,
   mods: PlanModification[],
   windows: PlanElement[],
+  ppm: number,
 ): string | null {
   // 1. 外墙与承重墙不可移动
   const sameWall = (a: Wall, b: Wall) =>
@@ -294,16 +374,38 @@ function validatePlan(
       }
     }
   }
-  // 3. 房间不得过度重叠
+  // 3. 所有门窗 opening 必须依附真实墙段，且结构点与画布元素同步
+  const movedIds = new Set(mods.flatMap((modification) => modification.movedElementIds?.map((move) => move.id) ?? []));
+  for (const opening of projectedStructure.doors) {
+    const wall = projectedStructure.walls.find((item) => item.id === opening.wallId);
+    if (!wall) return `门洞「${opening.id}」未依附有效墙体`;
+    if (!isPointOnWall(opening.point, wall, 0.03 * ppm)) {
+      return `门洞「${opening.id}」偏离所属墙体`;
+    }
+    if (opening.linkedElementId) {
+      const element = projectedElements.find((item) => item.id === opening.linkedElementId);
+      const tolerance = movedIds.has(opening.linkedElementId) ? 0.05 * ppm : DOOR_ROOM_TOL_M * ppm;
+      if (!element || Math.hypot(element.x - opening.point.x, element.y - opening.point.y) > tolerance) {
+        return `门洞「${opening.id}」与画布标记不同步`;
+      }
+    }
+  }
+  for (const opening of projectedStructure.windows) {
+    const wall = projectedStructure.walls.find((item) => item.id === opening.wallId);
+    if (!wall) return `窗洞「${opening.id}」未依附有效墙体`;
+    if (!isPointOnWall(opening.point, wall, 0.03 * ppm)) return `窗洞「${opening.id}」偏离所属墙体`;
+  }
+
+  // 4. 房间不得过度重叠
   const rooms = projectedElements.filter((e) => ELEMENT_SPECS[e.type]?.category === 'room');
   for (let i = 0; i < rooms.length; i += 1) {
     for (let j = i + 1; j < rooms.length; j += 1) {
       if (roomsOverlap(rooms[i], rooms[j])) return '造成房间重叠';
     }
   }
-  // 4. 所有房间保持连通
+  // 5. 所有房间保持标注可达
   const doors = projectedElements.filter((e) => e.type === 'entry_door' || e.type === 'room_door');
-  if (!roomsConnected(rooms, doors, 0.3 * 75)) return '产生不可达房间';
+  if (!roomsConnected(rooms, doors, 0.3 * ppm)) return '产生不可达房间';
   return null;
 }
 
@@ -336,6 +438,8 @@ function infeasiblePlan(
     predictedCategories: ctx.baseResult.categories,
     solvedIssueKeys: [],
     remainingIssueKeys: ctx.baseResult.issues.map((i) => i.key),
+    solvedIssues: [],
+    introducedIssues: [],
     valueScore: 0,
     changeDegree: 'minimal',
     risks: finalRisks,
@@ -356,16 +460,38 @@ function buildPlan(
   const projectedStructure = applyStructure(ctx.structure, mods);
 
   const projected = analyzePlan(projectedElements, ctx.options);
-  const solved = ctx.baseResult.issues.filter((i) => !projected.issues.some((p) => p.key === i.key));
+  const baseIdentities = new Set(ctx.baseResult.issues.map(issueIdentity));
+  const projectedIdentities = new Set(projected.issues.map(issueIdentity));
+  const solved = ctx.baseResult.issues.filter((issue) => !projectedIdentities.has(issueIdentity(issue)));
+  const introduced = projected.issues.filter((issue) => !baseIdentities.has(issueIdentity(issue)));
   const remaining = projected.issues.map((i) => i.key);
 
-  const infeasible = validatePlan(projectedElements, projectedStructure, ctx.structure, mods, ctx.baseElements.filter((e) => e.type === 'window'));
+  let infeasible = validatePlan(
+    projectedElements,
+    projectedStructure,
+    ctx.structure,
+    mods,
+    ctx.baseElements.filter((e) => e.type === 'window'),
+    ctx.ppm,
+  );
+  if (!infeasible && introduced.some((issue) => issue.severity === 'high')) {
+    infeasible = `方案会新增高风险问题：${introduced
+      .filter((issue) => issue.severity === 'high')
+      .map((issue) => issue.name)
+      .join('、')}`;
+  }
+  if (!infeasible && projected.rawOverall < ctx.baseResult.rawOverall) {
+    infeasible = `方案会使五维原始评分下降 ${ctx.baseResult.rawOverall - projected.rawOverall} 分`;
+  }
 
   const movedDoors = mods.reduce((n, m) => n + (m.movedElementIds?.length ?? 0), 0);
   const screens = mods.reduce((n, m) => n + (m.addedElements?.length ?? 0), 0);
   const walls = mods.reduce((n, m) => n + (m.addedWalls?.length ?? 0), 0);
   const solvedPenalty = solved.reduce((s, i) => s + i.appliedPenalty, 0);
-  const valueScore = Math.round(solvedPenalty - movedDoors * COST_MOVE - screens * COST_SCREEN - walls * COST_WALL);
+  const introducedPenalty = introduced.reduce((sum, issue) => sum + issue.appliedPenalty, 0);
+  const valueScore = Math.round(
+    solvedPenalty - introducedPenalty - movedDoors * COST_MOVE - screens * COST_SCREEN - walls * COST_WALL,
+  );
 
   const degree: CandidatePlan['changeDegree'] = mods.length >= 3 ? 'major' : mods.length === 2 ? 'balanced' : 'minimal';
 
@@ -418,6 +544,8 @@ function buildPlan(
     predictedCategories: projected.categories,
     solvedIssueKeys: solved.map((i) => i.key),
     remainingIssueKeys: remaining,
+    solvedIssues: solved.map(issueDigest),
+    introducedIssues: introduced.map(issueDigest),
     valueScore,
     changeDegree: degree,
     risks: finalRisks,
@@ -467,13 +595,11 @@ function solveEntryBathroom(ctx: BuildCtx, issue: Issue): ProblemSolution {
   }
   if (!targetDoor) return { ...empty, reason: '未找到被入户门正对的房间门，无法生成结构方案' };
 
-  const targetRoom = roomOfDoor(rooms, targetDoor, tol);
   const a = center(entry);
   const b = center(targetDoor);
 
-  // 小房间（较短边不足）无法安全设置玄关屏风，会阻塞通行通道
-  const screenFeasible =
-    !targetRoom || Math.min(aabb(targetRoom).width, aabb(targetRoom).height) >= MIN_SCREEN_ROOM_M * ctx.ppm;
+  // 两门距离过近时不强行放屏风，避免直接堵住门口。
+  const screenFeasible = Math.hypot(b.x - a.x, b.y - a.y) >= MIN_SCREEN_AXIS_M * ctx.ppm;
 
   let screenMod: PlanModification | null = null;
   if (screenFeasible) {
@@ -488,10 +614,12 @@ function solveEntryBathroom(ctx: BuildCtx, issue: Issue): ProblemSolution {
   }
 
   const relocate: PlanModification[] = [];
-  if (targetRoom) {
-    const perp = perpDir(a, b);
-    const next = shiftDoorInRoom(targetDoor, targetRoom, perp, 0.8, ctx.ppm);
-    if (next) {
+  const shiftForward = shiftDoorOnWall(targetDoor, ctx.structure, 0.8, ctx.ppm);
+  const shift = shiftForward.position
+    ? shiftForward
+    : shiftDoorOnWall(targetDoor, ctx.structure, -0.8, ctx.ppm);
+  if (shift.position) {
+      const next = shift.position;
       const from = center(targetDoor);
       relocate.push({
         kind: 'relocate-door',
@@ -504,7 +632,6 @@ function solveEntryBathroom(ctx: BuildCtx, issue: Issue): ProblemSolution {
         movedElementIds: [{ id: targetDoor.id, x: next.x, y: next.y }],
         sealedDoorIds: ['do-' + targetDoor.id],
       });
-    }
   }
 
   const minimal: PlanModification[] = screenMod ? [screenMod] : relocate.length ? [relocate[0]] : [];
@@ -520,7 +647,9 @@ function solveEntryBathroom(ctx: BuildCtx, issue: Issue): ProblemSolution {
     type: 'entry-bathroom',
     minimal,
     full: full.length ? full : minimal,
-    reason: relocate.length ? undefined : '房间尺寸不足，没有足够墙面移动门洞（仅可做玄关遮挡）',
+    reason: relocate.length
+      ? undefined
+      : `${shift.reason ?? shiftForward.reason ?? '没有足够墙面移动门洞'}（仅可做玄关遮挡）`,
   };
 }
 function solveDoorDoor(ctx: BuildCtx, issue: Issue): ProblemSolution {
@@ -530,14 +659,10 @@ function solveDoorDoor(ctx: BuildCtx, issue: Issue): ProblemSolution {
   const doorB = ctx.baseElements.find((e) => e.id === ids[1] && e.type === 'room_door');
   if (!doorA || !doorB) return { ...empty, reason: '未能定位正对的两扇房门' };
 
-  const rooms = ctx.baseElements.filter((r) => ELEMENT_SPECS[r.type]?.category === 'room');
-  const tol = DOOR_ROOM_TOL_M * ctx.ppm;
-  const roomA = roomOfDoor(rooms, doorA, tol);
-  const roomB = roomOfDoor(rooms, doorB, tol);
-  const perp = perpDir(center(doorA), center(doorB));
-
-  const nextA = shiftDoorInRoom(doorA, roomA, perp, 0.6, ctx.ppm);
-  const nextB = shiftDoorInRoom(doorB, roomB, perp, -0.6, ctx.ppm);
+  const shiftA = shiftDoorOnWall(doorA, ctx.structure, 0.6, ctx.ppm);
+  const shiftB = shiftDoorOnWall(doorB, ctx.structure, -0.6, ctx.ppm);
+  const nextA = shiftA.position;
+  const nextB = shiftB.position;
 
   const mods: PlanModification[] = [];
   if (nextA) {
@@ -573,7 +698,7 @@ function solveDoorDoor(ctx: BuildCtx, issue: Issue): ProblemSolution {
   if (modsFull.length === 0) {
     return {
       ...empty,
-      reason: '两侧房间尺寸不足，没有足够墙面移动门洞，且无法安全增设隔断（会阻塞通道）',
+      reason: [shiftA.reason, shiftB.reason].filter(Boolean).join('；') || '两侧门洞没有足够墙面完成错位',
     };
   }
 
@@ -592,11 +717,7 @@ function solveLongCorridor(ctx: BuildCtx, issue: Issue): ProblemSolution {
     .filter((e): e is PlanElement => Boolean(e));
   if (group.length < 3) return { ...empty, reason: '未能识别构成长走廊的门洞序列' };
 
-  const rooms = ctx.baseElements.filter((r) => ELEMENT_SPECS[r.type]?.category === 'room');
-  const tol = DOOR_ROOM_TOL_M * ctx.ppm;
   const sorted = [...group].sort((p, q) => center(p).x + center(p).y - (center(q).x + center(q).y));
-  const axisVec = mainAxis(sorted.map(center));
-  const perp = { x: -axisVec.y, y: axisVec.x };
 
   const node = makeScreen(center(sorted[0]), center(sorted[sorted.length - 1]), 'cor-node', ctx.ppm);
   const nodeMod: PlanModification = {
@@ -609,14 +730,18 @@ function solveLongCorridor(ctx: BuildCtx, issue: Issue): ProblemSolution {
 
   const movable = sorted.filter((d) => d.type === 'room_door');
   const entryMods: PlanModification[] = [];
+  const shiftReasons: string[] = [];
   let idx = 0;
   for (const door of movable) {
     if (entryMods.length >= 2) break;
-    const room = roomOfDoor(rooms, door, tol);
     const sign = idx % 2 === 0 ? 1 : -1;
-    const next = shiftDoorInRoom(door, room, perp, 0.7 * sign, ctx.ppm);
+    const attempt = shiftDoorOnWall(door, ctx.structure, 0.7 * sign, ctx.ppm);
+    const next = attempt.position;
     idx += 1;
-    if (!next) continue;
+    if (!next) {
+      if (attempt.reason) shiftReasons.push(attempt.reason);
+      continue;
+    }
     const from = center(door);
     entryMods.push({
       kind: 'offset-door',
@@ -636,7 +761,7 @@ function solveLongCorridor(ctx: BuildCtx, issue: Issue): ProblemSolution {
       type: 'long-corridor',
       minimal: [nodeMod],
       full: [nodeMod],
-      reason: '沿走廊房间墙面不足，没有足够墙面移动门洞（仅可做走廊节点分割）',
+      reason: `${shiftReasons.join('；') || '沿走廊房间墙面不足'}（仅可做走廊节点分割）`,
     };
   }
 
@@ -714,7 +839,7 @@ export function generateCandidatePlans(input: OptimizerInput): OptimizationResul
       plans: [
         infeasiblePlan('A', '方案 A · 最小改动', reason, ctx),
         infeasiblePlan('B', '方案 B · 综合平衡', reason, ctx),
-        infeasiblePlan('C', '方案 C · 评分最高', reason, ctx),
+        infeasiblePlan('C', '方案 C · 结构综合调整', reason, ctx),
       ],
       hasStructuralIssue: true,
       generatedAt: 0,
@@ -739,7 +864,7 @@ export function generateCandidatePlans(input: OptimizerInput): OptimizationResul
       '涉及门洞开凿与封堵，需现场确认所在墙体为非承重墙。',
       ...partial,
     ]),
-    buildPlan('C', '方案 C · 结构综合调整（评分最高）', ctx, modsC, [
+    buildPlan('C', '方案 C · 结构综合调整', ctx, modsC, [
       '改动范围最大、工期与造价最高，建议由结构工程师复核后施工。',
       ...partial,
     ]),
@@ -792,8 +917,11 @@ function dedupeMods(mods: PlanModification[]): PlanModification[] {
 function buildFurnitureOnly(ctx: BuildCtx): CandidatePlan[] {
   const { elements: allFixed } = applyAllFixesToElements(ctx.baseElements, ctx.options, ctx.ppm);
   const projected = analyzePlan(allFixed, ctx.options);
-  const solved = ctx.baseResult.issues.filter((i) => !projected.issues.some((p) => p.key === i.key));
-  const conceptRisk = ctx.conceptOnly ? ['未标记承重墙，本方案为概念候选，不可直接施工'] : [];
+  const baseIdentities = new Set(ctx.baseResult.issues.map(issueIdentity));
+  const projectedIdentities = new Set(projected.issues.map(issueIdentity));
+  const solved = ctx.baseResult.issues.filter((issue) => !projectedIdentities.has(issueIdentity(issue)));
+  const introduced = projected.issues.filter((issue) => !baseIdentities.has(issueIdentity(issue)));
+  const conceptRisk: string[] = [];
   const planA: CandidatePlan = {
     id: 'A',
     title: '方案 A · 家具自动优化（最小改动）',
@@ -813,29 +941,19 @@ function buildFurnitureOnly(ctx: BuildCtx): CandidatePlan[] {
     predictedCategories: projected.categories,
     solvedIssueKeys: solved.map((i) => i.key),
     remainingIssueKeys: projected.issues.map((i) => i.key),
+    solvedIssues: solved.map(issueDigest),
+    introducedIssues: introduced.map(issueDigest),
     valueScore: Math.round(solved.reduce((s, i) => s + i.appliedPenalty, 0)),
     changeDegree: 'minimal',
     risks: conceptRisk,
-    conceptOnly: ctx.conceptOnly,
+    conceptOnly: false,
   };
   const note = '当前户型未检测到可通过结构调整解决的问题，本方案与方案 A 内容一致。';
   return [
     planA,
     { ...planA, id: 'B', title: '方案 B · 家具优化（综合平衡）', risks: [...conceptRisk, note] },
-    { ...planA, id: 'C', title: '方案 C · 家具优化（评分最高）', risks: [...conceptRisk, note] },
+    { ...planA, id: 'C', title: '方案 C · 家具优化（完整建议）', risks: [...conceptRisk, note] },
   ];
 }
 
 /* ---- 工具 ---- */
-function perpDir(a: Point, b: Point): Point {
-  const d = normalize(sub(b, a));
-  return { x: -d.y, y: d.x };
-}
-
-function mainAxis(points: Point[]): Point {
-  const a = points[0];
-  const b = points[points.length - 1];
-  const d = sub(b, a);
-  if (Math.abs(d.x) >= Math.abs(d.y)) return { x: Math.sign(d.x) || 1, y: 0 };
-  return { x: 0, y: Math.sign(d.y) || 1 };
-}

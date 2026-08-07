@@ -6,33 +6,39 @@ import { ELEMENT_SPECS } from '@/lib/element-catalog';
 import { createProjectFromSample, SAMPLE_CANVAS, SAMPLE_PIXELS_PER_METER } from '@/lib/samples';
 import { normalizeDeg } from '@/lib/geometry';
 import { applyAllFixesToElements } from '@/lib/apply-fixes';
+import { issueIdentity } from '@/lib/issue-diff';
 import { generateCandidatePlans, buildStructureFromElements } from '@/lib/optimizer';
-import type { LayerId, LayerRegion } from '@/lib/analysis-layers';
+import type { LayerId, LayerSelection } from '@/lib/analysis-layers';
 import { EMPTY_ENVIRONMENT, type EnvironmentData } from '@/lib/environment';
 import { analyzePlan, type ContextOptions } from '@/lib/rules/engine';
+import {
+  DEFAULT_ACTIVE_LAYERS,
+  normalizePersistedState,
+  STORAGE_KEY,
+  STORAGE_VERSION,
+} from '@/store/persistence';
 import type {
   ApplyAllSummary,
-  CandidatePlan,
   ElementType,
   FixAction,
   OptimizationResult,
   PlanElement,
   PlanImage,
   Project,
+  Scenario,
   ScenarioKey,
   StructureModel,
   Wall,
 } from '@/lib/types';
 
-const STORAGE_KEY = 'fengshui-layout-planner:v1';
 const HISTORY_LIMIT = 50;
 
 /** 稳定引用，避免 useSyncExternalStore 在 project 为 null 时无限循环 */
 const EMPTY_ELEMENTS: PlanElement[] = [];
 
 interface HistoryEntry {
-  past: PlanElement[][];
-  future: PlanElement[][];
+  past: Scenario[];
+  future: Scenario[];
 }
 
 export interface ProjectState {
@@ -87,13 +93,17 @@ export interface ProjectState {
   /** 图层整体透明度 0-1 */
   layerOpacity: number;
   /** 当前选中的图层区域（点击图例查看计算依据） */
-  selectedRegion: LayerRegion | null;
+  selectedRegion: LayerSelection | null;
   /** 土地规划环境数据接口（普通户型默认为空，不接入室内能量） */
   environment: EnvironmentData;
+  /** localStorage 损坏时自动重置后的非阻塞提示 */
+  persistenceNotice: string | null;
   toggleLayer: (id: LayerId) => void;
   setLayerOpacity: (value: number) => void;
-  selectRegion: (region: LayerRegion | null) => void;
+  selectRegion: (region: LayerSelection | null) => void;
   setEnvironment: (env: EnvironmentData) => void;
+  dismissPersistenceNotice: () => void;
+  setPersistenceNotice: (message: string) => void;
 
   addElement: (type: ElementType, position?: { x: number; y: number }) => string | null;
   updateElement: (id: string, patch: Partial<PlanElement>, options?: { commit?: boolean }) => void;
@@ -124,6 +134,24 @@ function blankProject(name: string): Project {
   };
 }
 
+function cloneStructure(structure: StructureModel | undefined): StructureModel | undefined {
+  if (!structure) return undefined;
+  return {
+    walls: structure.walls.map((wall) => ({ ...wall, adjacentRooms: [...wall.adjacentRooms] })),
+    doors: structure.doors.map((door) => ({ ...door, point: { ...door.point } })),
+    windows: structure.windows.map((window) => ({ ...window, point: { ...window.point } })),
+    zones: structure.zones.map((zone) => ({ ...zone })),
+    loadBearingMarked: structure.loadBearingMarked,
+  };
+}
+
+function cloneScenario(scenario: Scenario): Scenario {
+  return {
+    elements: scenario.elements.map((element) => ({ ...element })),
+    structure: cloneStructure(scenario.structure),
+  };
+}
+
 const noopStorage = {
   getItem: () => null,
   setItem: () => undefined,
@@ -136,7 +164,7 @@ export const useProjectStore = create<ProjectState>()(
       /** 读写当前项目的辅助函数 */
       const mutate = (
         updater: (project: Project) => Project,
-        options: { recordHistory?: boolean } = {},
+        options: { recordHistory?: boolean; invalidateCandidates?: boolean } = {},
       ) => {
         const state = get();
         const id = state.currentId;
@@ -149,7 +177,7 @@ export const useProjectStore = create<ProjectState>()(
         if (options.recordHistory) {
           const entry = nextHistory[historyKey] ?? { past: [], future: [] };
           nextHistory[historyKey] = {
-            past: [...entry.past, project.scenarios[state.scenario].elements].slice(-HISTORY_LIMIT),
+            past: [...entry.past, cloneScenario(project.scenarios[state.scenario])].slice(-HISTORY_LIMIT),
             future: [],
           };
         }
@@ -158,6 +186,9 @@ export const useProjectStore = create<ProjectState>()(
         set({
           projects: { ...state.projects, [id]: updated },
           history: nextHistory,
+          ...(options.invalidateCandidates === false
+            ? {}
+            : { candidates: null, previewPlanId: null, selectedRegion: null }),
         });
       };
 
@@ -168,7 +199,7 @@ export const useProjectStore = create<ProjectState>()(
             ...project,
             scenarios: {
               ...project.scenarios,
-              [scenario]: { elements },
+              [scenario]: { ...project.scenarios[scenario], elements },
             },
           }),
           { recordHistory },
@@ -184,18 +215,11 @@ export const useProjectStore = create<ProjectState>()(
         history: {},
         candidates: null,
         previewPlanId: null,
-        activeLayers: {
-          heatmap: false,
-          privacy: false,
-          airflow: false,
-          circulation: false,
-          daylight: false,
-          zoning: false,
-          energy: false,
-        },
+        activeLayers: { ...DEFAULT_ACTIVE_LAYERS },
         layerOpacity: 0.55,
         selectedRegion: null,
         environment: EMPTY_ENVIRONMENT,
+        persistenceNotice: null,
 
         createBlankProject: (name = '未命名户型') => {
           const project = blankProject(name);
@@ -205,6 +229,8 @@ export const useProjectStore = create<ProjectState>()(
             currentId: project.id,
             scenario: 'before',
             selectedId: null,
+            candidates: null,
+            previewPlanId: null,
           }));
           return project.id;
         },
@@ -218,6 +244,8 @@ export const useProjectStore = create<ProjectState>()(
             currentId: project.id,
             scenario: 'before',
             selectedId: null,
+            candidates: null,
+            previewPlanId: null,
           }));
           return project.id;
         },
@@ -232,15 +260,18 @@ export const useProjectStore = create<ProjectState>()(
             name: `${source.name} 副本`,
             createdAt: ts,
             updatedAt: ts,
+            structure: cloneStructure(source.structure),
             scenarios: {
-              before: { elements: source.scenarios.before.elements.map((e) => ({ ...e })) },
-              after: { elements: source.scenarios.after.elements.map((e) => ({ ...e })) },
+              before: cloneScenario(source.scenarios.before),
+              after: cloneScenario(source.scenarios.after),
             },
           };
           set((state) => ({
             projects: { ...state.projects, [copy.id]: copy },
             order: [copy.id, ...state.order],
             currentId: copy.id,
+            candidates: null,
+            previewPlanId: null,
           }));
           return copy.id;
         },
@@ -255,6 +286,8 @@ export const useProjectStore = create<ProjectState>()(
               order,
               currentId: state.currentId === id ? (order[0] ?? null) : state.currentId,
               selectedId: null,
+              candidates: null,
+              previewPlanId: null,
             };
           }),
 
@@ -264,10 +297,19 @@ export const useProjectStore = create<ProjectState>()(
             if (!project) return state;
             return {
               projects: { ...state.projects, [id]: { ...project, name, updatedAt: Date.now() } },
+              candidates: null,
+              previewPlanId: null,
             };
           }),
 
-        setCurrent: (id) => set({ currentId: id, selectedId: null, scenario: 'before' }),
+        setCurrent: (id) => set({
+          currentId: id,
+          selectedId: null,
+          scenario: 'before',
+          candidates: null,
+          previewPlanId: null,
+          selectedRegion: null,
+        }),
 
         setImage: (image) => mutate((project) => ({ ...project, image })),
         setNorthAngle: (deg) =>
@@ -280,22 +322,49 @@ export const useProjectStore = create<ProjectState>()(
         setCanvasSize: (width, height) =>
           mutate((project) => ({
             ...project,
-            canvas: { width: Math.round(width), height: Math.round(height) },
+            canvas: {
+              width: Math.round(Math.max(400, Math.min(4000, width))),
+              height: Math.round(Math.max(400, Math.min(4000, height))),
+            },
           })),
 
-        setScenario: (scenario) => set({ scenario, selectedId: null }),
+        setScenario: (scenario) =>
+          set((state) => ({
+            scenario,
+            selectedId: null,
+            selectedRegion: null,
+            ...(state.scenario === scenario ? {} : { candidates: null, previewPlanId: null }),
+          })),
 
-        copyScenario: (from, to) =>
-          mutate(
-            (project) => ({
-              ...project,
-              scenarios: {
-                ...project.scenarios,
-                [to]: { elements: project.scenarios[from].elements.map((e) => ({ ...e })) },
+        copyScenario: (from, to) => {
+          const state = get();
+          const id = state.currentId;
+          if (!id) return;
+          const project = state.projects[id];
+          if (!project) return;
+          const key = `${id}:${to}`;
+          const entry = state.history[key] ?? { past: [], future: [] };
+          set({
+            projects: {
+              ...state.projects,
+              [id]: {
+                ...project,
+                updatedAt: Date.now(),
+                scenarios: { ...project.scenarios, [to]: cloneScenario(project.scenarios[from]) },
               },
-            }),
-            { recordHistory: false },
-          ),
+            },
+            history: {
+              ...state.history,
+              [key]: {
+                past: [...entry.past, cloneScenario(project.scenarios[to])].slice(-HISTORY_LIMIT),
+                future: [],
+              },
+            },
+            candidates: null,
+            previewPlanId: null,
+            selectedRegion: null,
+          });
+        },
 
         applyFix: (scenario, fix) => {
           const state = get();
@@ -315,6 +384,37 @@ export const useProjectStore = create<ProjectState>()(
             rotation: normalizeDeg(target.rotation + (fix.rotationDelta ?? 0)),
           };
           const updatedElements = elements.map((e, i) => (i === idx ? next : e));
+          const currentResult = analyzePlan(elements, {
+            pixelsPerMeter: project.pixelsPerMeter,
+            northAngle: project.northAngle,
+            canvas: project.canvas,
+          });
+          const sourceIssue = currentResult.issues.find((issue) =>
+            issue.fix?.targetId === fix.targetId &&
+            issue.fix.dx === fix.dx &&
+            issue.fix.dy === fix.dy &&
+            issue.fix.rotationDelta === fix.rotationDelta,
+          );
+          if (!sourceIssue) {
+            set({ persistenceNotice: '该建议已与当前户型状态不一致，请重新查看分析结果。' });
+            return;
+          }
+          const updatedResult = analyzePlan(updatedElements, {
+            pixelsPerMeter: project.pixelsPerMeter,
+            northAngle: project.northAngle,
+            canvas: project.canvas,
+          });
+          const updatedIdentities = new Set(updatedResult.issues.map(issueIdentity));
+          if (
+            updatedIdentities.has(issueIdentity(sourceIssue)) ||
+            updatedResult.counts.high > currentResult.counts.high ||
+            updatedResult.rawOverall < currentResult.rawOverall
+          ) {
+            set({ persistenceNotice: '该自动调整无法安全消除问题或会降低原始评分，已保持当前布局。' });
+            return;
+          }
+          const historyKey = `${id}:${scenario}`;
+          const entry = state.history[historyKey] ?? { past: [], future: [] };
           set((s) => ({
             projects: {
               ...s.projects,
@@ -323,10 +423,19 @@ export const useProjectStore = create<ProjectState>()(
                 updatedAt: Date.now(),
                 scenarios: {
                   ...project.scenarios,
-                  [scenario]: { elements: updatedElements },
+                  [scenario]: { ...project.scenarios[scenario], elements: updatedElements },
                 },
               },
             },
+            history: {
+              ...s.history,
+              [historyKey]: {
+                past: [...entry.past, cloneScenario(project.scenarios[scenario])].slice(-HISTORY_LIMIT),
+                future: [],
+              },
+            },
+            candidates: null,
+            previewPlanId: null,
           }));
         },
 
@@ -366,7 +475,7 @@ export const useProjectStore = create<ProjectState>()(
           const nextHistory = { ...state.history };
           const entry = nextHistory[historyKey] ?? { past: [], future: [] };
           nextHistory[historyKey] = {
-            past: [...entry.past, elements].slice(-HISTORY_LIMIT),
+            past: [...entry.past, cloneScenario(project.scenarios[scenario])].slice(-HISTORY_LIMIT),
             future: [],
           };
 
@@ -378,11 +487,13 @@ export const useProjectStore = create<ProjectState>()(
                 updatedAt: Date.now(),
                 scenarios: {
                   ...project.scenarios,
-                  [scenario]: { elements: nextElements },
+                  [scenario]: { ...project.scenarios[scenario], elements: nextElements },
                 },
               },
             },
             history: nextHistory,
+            candidates: null,
+            previewPlanId: null,
           });
           return summary;
         },
@@ -411,6 +522,9 @@ export const useProjectStore = create<ProjectState>()(
             buildStructureFromElements(elements, marked, project.pixelsPerMeter);
           const result = generateCandidatePlans({ elements, structure, options });
           result.generatedAt = Date.now();
+          result.sourceProjectId = id;
+          result.sourceScenario = scenario;
+          result.sourceUpdatedAt = project.updatedAt;
           set({ candidates: result, previewPlanId: null });
         },
 
@@ -423,20 +537,26 @@ export const useProjectStore = create<ProjectState>()(
           const project = state.projects[id];
           if (!project || !state.candidates) return;
           const plan = state.candidates.plans.find((p) => p.id === planId);
-          if (!plan) return;
+          if (!plan || !plan.feasible) return;
+          if (
+            state.candidates.sourceProjectId !== id ||
+            state.candidates.sourceScenario !== state.scenario ||
+            state.candidates.sourceUpdatedAt !== project.updatedAt
+          ) {
+            set({
+              candidates: null,
+              previewPlanId: null,
+              persistenceNotice: '户型已发生变化，旧候选方案已失效，请重新生成。',
+            });
+            return;
+          }
 
-          // 复制当前场景到「改造前」作为原始基准，再写入「优化后」
-          const current = state.scenario;
-          const beforeElements = project.scenarios[current].elements;
-          const beforeStructure =
-            project.scenarios[current].structure ?? project.structure ?? null;
-
-          // 整批记一个撤销点
+          // 原始 before 永远保留；候选只写入 after，并把原 after 场景作为一个完整撤销点。
           const historyKey = `${id}:after`;
           const nextHistory = { ...state.history };
           const entry = nextHistory[historyKey] ?? { past: [], future: [] };
           nextHistory[historyKey] = {
-            past: [...entry.past, beforeElements].slice(-HISTORY_LIMIT),
+            past: [...entry.past, cloneScenario(project.scenarios.after)].slice(-HISTORY_LIMIT),
             future: [],
           };
 
@@ -447,10 +567,10 @@ export const useProjectStore = create<ProjectState>()(
                 ...project,
                 updatedAt: Date.now(),
                 scenarios: {
-                  before: { elements: beforeElements.map((e) => ({ ...e })), structure: beforeStructure ? { ...beforeStructure } : undefined },
+                  before: cloneScenario(project.scenarios.before),
                   after: {
                     elements: plan.projectedElements.map((e) => ({ ...e })),
-                    structure: { ...plan.projectedStructure },
+                    structure: cloneStructure(plan.projectedStructure),
                   },
                 },
               },
@@ -467,6 +587,8 @@ export const useProjectStore = create<ProjectState>()(
         setLayerOpacity: (value) => set({ layerOpacity: Math.max(0, Math.min(1, value)) }),
         selectRegion: (region) => set({ selectedRegion: region }),
         setEnvironment: (env) => set({ environment: env }),
+        dismissPersistenceNotice: () => set({ persistenceNotice: null }),
+        setPersistenceNotice: (message) => set({ persistenceNotice: message }),
 
         setStructure: (structure) =>
           mutate((project) => {
@@ -475,10 +597,10 @@ export const useProjectStore = create<ProjectState>()(
               ...project,
               scenarios: {
                 ...project.scenarios,
-                [scenario]: { ...project.scenarios[scenario], structure: { ...structure } },
+                [scenario]: { ...project.scenarios[scenario], structure: cloneStructure(structure) },
               },
             };
-          }),
+          }, { recordHistory: true }),
 
         addWall: (wall) =>
           mutate((project) => {
@@ -494,7 +616,7 @@ export const useProjectStore = create<ProjectState>()(
                 [scenario]: { ...project.scenarios[scenario], structure: merged },
               },
             };
-          }),
+          }, { recordHistory: true }),
 
         removeWall: (wid) =>
           mutate((project) => {
@@ -510,7 +632,7 @@ export const useProjectStore = create<ProjectState>()(
                 [scenario]: { ...project.scenarios[scenario], structure: merged },
               },
             };
-          }),
+          }, { recordHistory: true }),
 
         setLoadBearingMarked: (marked) =>
           mutate((project) => {
@@ -526,7 +648,7 @@ export const useProjectStore = create<ProjectState>()(
                 [scenario]: { ...project.scenarios[scenario], structure: merged },
               },
             };
-          }),
+          }, { recordHistory: true }),
 
         addElement: (type, position) => {
           const state = get();
@@ -581,7 +703,7 @@ export const useProjectStore = create<ProjectState>()(
           if (!entry || entry.past.length === 0) return;
           const project = state.projects[id];
           const previous = entry.past[entry.past.length - 1];
-          const current = project.scenarios[state.scenario].elements;
+          const current = cloneScenario(project.scenarios[state.scenario]);
           set({
             projects: {
               ...state.projects,
@@ -590,7 +712,7 @@ export const useProjectStore = create<ProjectState>()(
                 updatedAt: Date.now(),
                 scenarios: {
                   ...project.scenarios,
-                  [state.scenario]: { elements: previous },
+                  [state.scenario]: cloneScenario(previous),
                 },
               },
             },
@@ -599,6 +721,9 @@ export const useProjectStore = create<ProjectState>()(
               [key]: { past: entry.past.slice(0, -1), future: [current, ...entry.future] },
             },
             selectedId: null,
+            candidates: null,
+            previewPlanId: null,
+            selectedRegion: null,
           });
         },
 
@@ -611,7 +736,7 @@ export const useProjectStore = create<ProjectState>()(
           if (!entry || entry.future.length === 0) return;
           const project = state.projects[id];
           const next = entry.future[0];
-          const current = project.scenarios[state.scenario].elements;
+          const current = cloneScenario(project.scenarios[state.scenario]);
           set({
             projects: {
               ...state.projects,
@@ -620,7 +745,7 @@ export const useProjectStore = create<ProjectState>()(
                 updatedAt: Date.now(),
                 scenarios: {
                   ...project.scenarios,
-                  [state.scenario]: { elements: next },
+                  [state.scenario]: cloneScenario(next),
                 },
               },
             },
@@ -629,21 +754,46 @@ export const useProjectStore = create<ProjectState>()(
               [key]: { past: [...entry.past, current], future: entry.future.slice(1) },
             },
             selectedId: null,
+            candidates: null,
+            previewPlanId: null,
+            selectedRegion: null,
           });
         },
       };
     },
     {
       name: STORAGE_KEY,
-      version: 1,
+      version: STORAGE_VERSION,
       storage: createJSONStorage(() =>
         typeof window === 'undefined' ? noopStorage : window.localStorage,
       ),
+      migrate: (persistedState, storedVersion) =>
+        normalizePersistedState(persistedState, storedVersion >= STORAGE_VERSION),
+      merge: (persistedState, currentState) => ({
+        ...currentState,
+        ...normalizePersistedState(persistedState, true),
+        history: {},
+        selectedId: null,
+        selectedRegion: null,
+      }),
+      onRehydrateStorage: (state) => (_rehydrated, error) => {
+        if (!error || typeof window === 'undefined') return;
+        try {
+          window.localStorage.removeItem(STORAGE_KEY);
+        } catch {
+          // 隐私模式等环境可能禁止 localStorage；仍保持内存态可用。
+        }
+        state.setPersistenceNotice('本地项目数据已损坏或无法读取，已安全重置为空白状态。');
+      },
       partialize: (state) => ({
         projects: state.projects,
         order: state.order,
         currentId: state.currentId,
         scenario: state.scenario,
+        candidates: state.candidates,
+        previewPlanId: state.previewPlanId,
+        activeLayers: state.activeLayers,
+        layerOpacity: state.layerOpacity,
       }),
     },
   ),

@@ -11,15 +11,20 @@ const M = 1; // margin in meters
 let idc = 0;
 function el(type: ElementType, x: number, y: number, opts: { w?: number; h?: number; r?: number; name?: string } = {}): PlanElement {
   const [dw, dh] = ELEMENT_SPECS[type].defaultSize;
+  const widthM = opts.w ?? dw;
+  const heightM = opts.h ?? dh;
+  // 验收户型的房间坐标采用左上角，门窗 / 家具坐标采用中心点。
+  // 统一转成 PlanElement 的中心点坐标，避免房间整体偏移导致门洞悬空。
+  const isRoom = ELEMENT_SPECS[type].category === 'room';
   idc += 1;
   return {
     id: `verify-${type}-${idc}`,
     type,
     name: opts.name ?? ELEMENT_SPECS[type].label,
-    x: (M + x) * PPM,
-    y: (M + y) * PPM,
-    width: (opts.w ?? dw) * PPM,
-    height: (opts.h ?? dh) * PPM,
+    x: (M + x + (isRoom ? widthM / 2 : 0)) * PPM,
+    y: (M + y + (isRoom ? heightM / 2 : 0)) * PPM,
+    width: widthM * PPM,
+    height: heightM * PPM,
     rotation: opts.r ?? 0,
   };
 }
@@ -63,7 +68,7 @@ export function longCorridorApartment(): PlanElement[] {
     el('room_door', 3.5, 3.0, { r: 0, name: '主卧门' }),
     el('room_door', 3.5, 1.0, { r: 0, name: '卫生间门' }),
     el('room_door', 5.5, 2.0, { r: 0, name: '厨房门' }),
-    el('room_door', 6, 4.0, { r: 0, name: '客厅门' }),
+    el('room_door', 6, 5.0, { r: 0, name: '客厅门' }),
     el('window', 0, 0, { r: 0, name: '主卧窗' }),
     el('window', 0, 7, { r: 0, name: '书房窗' }),
     el('window', 6, 9, { r: 180, name: '客厅窗' }),

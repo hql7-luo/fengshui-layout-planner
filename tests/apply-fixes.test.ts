@@ -1,5 +1,6 @@
 import { describe, expect, it } from 'vitest';
 import { analyzePlan, type ContextOptions } from '@/lib/rules/engine';
+import { distance } from '@/lib/geometry';
 import { applyAllFixesToElements } from '@/lib/apply-fixes';
 import { describeFix } from '@/lib/fix-summary';
 import { createProjectFromSample } from '@/lib/samples';
@@ -77,5 +78,19 @@ describe('applyAllFixesToElements', () => {
     const r = applyAllFixesToElements([], opts, 75);
     expect(r.elements).toEqual([]);
     expect(r.items).toEqual([]);
+  });
+
+  it('水槽自动错位会远离灶台，且不会降低五维原始评分', () => {
+    const project = createProjectFromSample('bathroom-in-center')!;
+    const before = project.scenarios.before.elements;
+    const stoveBefore = before.find((element) => element.type === 'stove')!;
+    const sinkBefore = before.find((element) => element.type === 'sink')!;
+    const result = applyAllFixesToElements(before, optsFor(project), project.pixelsPerMeter);
+    const stoveAfter = result.elements.find((element) => element.id === stoveBefore.id)!;
+    const sinkAfter = result.elements.find((element) => element.id === sinkBefore.id)!;
+    expect(distance(stoveAfter, sinkAfter)).toBeGreaterThan(distance(stoveBefore, sinkBefore));
+    expect(analyzePlan(result.elements, optsFor(project)).rawOverall).toBeGreaterThanOrEqual(
+      analyzePlan(before, optsFor(project)).rawOverall,
+    );
   });
 });

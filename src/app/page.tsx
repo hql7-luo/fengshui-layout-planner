@@ -44,7 +44,7 @@ export default function HomePage() {
             {[
               { k: `${RULES.length} 条`, v: '布局检测规则' },
               { k: '5 个', v: '分类评分维度' },
-              { k: '17 类', v: '可标记元素' },
+              { k: '18 类', v: '可标记元素' },
               { k: '100%', v: '本地计算' },
             ].map((item) => (
               <div key={item.v}>

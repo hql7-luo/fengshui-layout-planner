@@ -327,7 +327,7 @@ export function bboxOverlapArea(a: BBox, b: BBox): number {
 
 /**
  * 房间矩形是否过度重叠（允许微小容差，因旋转/标注误差）。
- * 重叠面积超过任意一方面积的 15% 视为冲突。
+ * 重叠面积超过较小房间面积的 15% 视为冲突。
  */
 export function roomsOverlap(a: PlanElement, b: PlanElement): boolean {
   const boxA = aabb(a);
@@ -336,7 +336,7 @@ export function roomsOverlap(a: PlanElement, b: PlanElement): boolean {
   if (overlap <= 0) return false;
   const areaA = boxA.width * boxA.height;
   const areaB = boxB.width * boxB.height;
-  return overlap > Math.max(areaA, areaB) * 0.15;
+  return overlap > Math.min(areaA, areaB) * 0.15;
 }
 
 /** 包围盒向外膨胀 t 像素 */
@@ -435,4 +435,3 @@ export function roomsConnected(
   }
   return true;
 }
-

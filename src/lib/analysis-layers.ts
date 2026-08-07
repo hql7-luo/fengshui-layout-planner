@@ -4,6 +4,7 @@ import {
   clamp,
   compassOf,
   containsPoint,
+  corners,
   facingCheck,
   facingVector,
   lineBlocked,
@@ -63,6 +64,8 @@ export interface LayerLine {
   label?: string;
   basis?: string;
 }
+
+export type LayerSelection = LayerRegion | LayerLine;
 
 export interface LayerOutput {
   regions: LayerRegion[];
@@ -140,7 +143,7 @@ export const LAYER_META: Record<
     label: '阳宅空间能量示意图',
     short: '能量示意',
     description:
-      '传统文化空间模型（非真实物理能量测量）：综合方位、门窗、气流、采光、开阔度、动静分区、房间功能、与中心关系及已触发规则，给出区域能量状态。',
+      '传统文化可视化模型，非物理能量测量：综合方位、门窗、采光、开阔度、动静分区、房间功能、与中心关系及已触发规则，给出区域状态。',
     legend: [
       { color: '#22c55e', label: '流动顺畅' },
       { color: '#84cc16', label: '相对平衡' },
@@ -173,6 +176,9 @@ function byType(elements: PlanElement[], type: string): PlanElement[] {
 /* ------------------------------------------------------------------ */
 function computeHeatmap(input: LayerInput): LayerOutput {
   const { analysis, elements, options } = input;
+  if (elements.length === 0) {
+    return { regions: [], lines: [], sufficient: false, insufficiencyReason: '缺少房间、门窗或家具标注，无法计算问题热区' };
+  }
   const ppm = options.pixelsPerMeter;
   const regions: LayerRegion[] = [];
   const lines: LayerLine[] = [];
@@ -211,6 +217,9 @@ function computePrivacy(input: LayerInput): LayerOutput {
   const targets = elements.filter((e) =>
     ['room_door', 'bed', 'bathroom', 'master_bedroom', 'second_bedroom'].includes(e.type),
   );
+  if (targets.length === 0) {
+    return { regions: [], lines: [], sufficient: false, insufficiencyReason: '缺少卧室、卫生间、床或房门标注，无法判断私密空间视线' };
+  }
   const regions: LayerRegion[] = [];
   const lines: LayerLine[] = [];
   let idx = 0;
@@ -289,6 +298,9 @@ function computeCirculation(input: LayerInput): LayerOutput {
   }
   const living = elements.find((e) => e.type === 'living_room') ?? rooms(elements)[0];
   const doors = byType(elements, 'room_door');
+  if (!living && doors.length === 0) {
+    return { regions: [], lines: [], sufficient: false, insufficiencyReason: '缺少客厅、房间或房门标注，无法建立主要生活动线' };
+  }
   const a = center(entry);
   const hub = living ? center(living) : a;
   const lines: LayerLine[] = [];
@@ -328,10 +340,13 @@ function computeDaylight(input: LayerInput): LayerOutput {
     return { regions: [], lines: [], sufficient: false, insufficiencyReason: '缺少窗户，无法估算采光潜力' };
   }
   const roomEls = rooms(elements);
+  if (roomEls.length === 0) {
+    return { regions: [], lines: [], sufficient: false, insufficiencyReason: '缺少房间标注，无法把窗户采光映射到功能空间' };
+  }
   const regions: LayerRegion[] = [];
   const lines: LayerLine[] = [];
   for (const room of roomEls) {
-    const b = aabb(room);
+    const polygon = corners(room).flatMap((point) => [point.x, point.y]);
     let best = Infinity;
     for (const w of windows) {
       const d = distPoints(center(w), center(room));
@@ -343,7 +358,7 @@ function computeDaylight(input: LayerInput): LayerOutput {
       id: `day-${room.id}`,
       layer: 'daylight',
       kind: t > 0.66 ? 'good' : t > 0.33 ? 'mid' : 'weak',
-      shape: { type: 'rect', x: b.x, y: b.y, w: b.width, h: b.height },
+      shape: { type: 'poly', points: polygon },
       label: `${room.name} 采光`,
       basis: `「${room.name}」到最近窗约 ${meters.toFixed(1)} 米，采光潜力${t > 0.66 ? '好' : t > 0.33 ? '一般' : '弱'}。`,
     });
@@ -370,13 +385,13 @@ function computeZoning(input: LayerInput): LayerOutput {
   const regions: LayerRegion[] = [];
   const lines: LayerLine[] = [];
   for (const room of roomEls) {
-    const b = aabb(room);
+    const polygon = corners(room).flatMap((point) => [point.x, point.y]);
     const z = zoneOf(room.type) === 'active' ? 'active' : zoneOf(room.type) === 'quiet' ? 'quiet' : 'transit';
     regions.push({
       id: `zone-${room.id}`,
       layer: 'zoning',
       kind: z,
-      shape: { type: 'rect', x: b.x, y: b.y, w: b.width, h: b.height },
+      shape: { type: 'poly', points: polygon },
       label: `${room.name}（${z === 'active' ? '动区' : z === 'quiet' ? '静区' : '过渡区'}）`,
       basis: `房间功能为「${ELEMENT_SPECS[room.type]?.label ?? room.type}」，属${z === 'active' ? '动区' : z === 'quiet' ? '静区' : '过渡区'}。`,
     });
@@ -401,14 +416,22 @@ function computeEnergy(input: LayerInput): LayerOutput {
   const ppm = options.pixelsPerMeter;
   const W = options.canvas.width;
   const H = options.canvas.height;
-  const cell = 0.5 * ppm;
   const roomsEls = rooms(elements);
   const windows = byType(elements, 'window');
   const doors = byType(elements, 'room_door').concat(byType(elements, 'entry_door'));
   if (roomsEls.length === 0 && doors.length === 0 && windows.length === 0) {
     return { regions: [], lines: [], sufficient: false, insufficiencyReason: '缺少房间、门窗数据，无法计算能量分布' };
   }
-  const house = { x: W / 2, y: H / 2 };
+  const footprint = unionBox(roomsEls) ?? { x: 0, y: 0, width: W, height: H };
+  const clipped = {
+    x: clamp(footprint.x, 0, W),
+    y: clamp(footprint.y, 0, H),
+    width: Math.max(0, Math.min(footprint.x + footprint.width, W) - clamp(footprint.x, 0, W)),
+    height: Math.max(0, Math.min(footprint.y + footprint.height, H) - clamp(footprint.y, 0, H)),
+  };
+  const MAX_ENERGY_CELLS = 2500;
+  const cell = Math.max(0.5 * ppm, Math.sqrt((clipped.width * clipped.height) / MAX_ENERGY_CELLS));
+  const house = { x: footprint.x + footprint.width / 2, y: footprint.y + footprint.height / 2 };
 
   // 预计算问题元素包围盒
   const issueBoxes = analysis.issues.map((iss) => ({
@@ -418,10 +441,12 @@ function computeEnergy(input: LayerInput): LayerOutput {
 
   const regions: LayerRegion[] = [];
   let idx = 0;
-  for (let y = 0; y < H; y += cell) {
-    for (let x = 0; x < W; x += cell) {
-      const cx = x + cell / 2;
-      const cy = y + cell / 2;
+  for (let y = clipped.y; y < clipped.y + clipped.height; y += cell) {
+    for (let x = clipped.x; x < clipped.x + clipped.width; x += cell) {
+      const width = Math.min(cell, clipped.x + clipped.width - x);
+      const height = Math.min(cell, clipped.y + clipped.height - y);
+      const cx = x + width / 2;
+      const cy = y + height / 2;
       const p: Point = { x: cx, y: cy };
 
       let score = 0;
@@ -493,13 +518,13 @@ function computeEnergy(input: LayerInput): LayerOutput {
       const basisText =
         `能量状态：${kind === 'flow' ? '流动顺畅' : kind === 'balanced' ? '相对平衡' : kind === 'stagnant' ? '能量停滞' : kind === 'conflict' ? '直接冲突' : '建议改善'}。` +
         (factors.length ? ' 依据：' + factors.join('；') + '。' : '') +
-        '（阳宅空间能量为传统文化可视化模型，非真实物理能量测量。）';
+        '（传统文化可视化模型，非物理能量测量。）';
 
       regions.push({
         id: `en-${idx++}`,
         layer: 'energy',
         kind,
-        shape: { type: 'rect', x, y, w: cell, h: cell },
+        shape: { type: 'rect', x, y, w: width, h: height },
         label: LAYER_META.energy.legend.find((l) => l.color === ENERGY_COLOR[kind])?.label ?? kind,
         basis: basisText,
       });
@@ -528,15 +553,23 @@ function pointInBox(p: Point, b: { x: number; y: number; width: number; height: 
   return p.x >= b.x && p.x <= b.x + b.width && p.y >= b.y && p.y <= b.y + b.height;
 }
 
-export function computeLayers(input: LayerInput): AllLayers {
+const NOT_COMPUTED: LayerOutput = {
+  regions: [],
+  lines: [],
+  sufficient: false,
+  insufficiencyReason: '图层尚未开启',
+};
+
+export function computeLayers(input: LayerInput, enabled: readonly LayerId[] = LAYER_IDS): AllLayers {
+  const active = new Set(enabled);
   return {
-    heatmap: computeHeatmap(input),
-    privacy: computePrivacy(input),
-    airflow: computeAirflow(input),
-    circulation: computeCirculation(input),
-    daylight: computeDaylight(input),
-    zoning: computeZoning(input),
-    energy: computeEnergy(input),
+    heatmap: active.has('heatmap') ? computeHeatmap(input) : NOT_COMPUTED,
+    privacy: active.has('privacy') ? computePrivacy(input) : NOT_COMPUTED,
+    airflow: active.has('airflow') ? computeAirflow(input) : NOT_COMPUTED,
+    circulation: active.has('circulation') ? computeCirculation(input) : NOT_COMPUTED,
+    daylight: active.has('daylight') ? computeDaylight(input) : NOT_COMPUTED,
+    zoning: active.has('zoning') ? computeZoning(input) : NOT_COMPUTED,
+    energy: active.has('energy') ? computeEnergy(input) : NOT_COMPUTED,
   };
 }
 

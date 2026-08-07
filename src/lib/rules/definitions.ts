@@ -133,7 +133,7 @@ function rotateBackToRoom(el: PlanElement, room?: PlanElement): FixAction {
 
 /** 把 from 沿 from→to 连线推开 distanceM 米（用于灶台/水槽错位） */
 function pushAway(from: PlanElement, to: PlanElement, distanceM: number): FixAction {
-  const dir = normalize(sub(to, from));
+  const dir = normalize(sub(from, to));
   return { targetId: from.id, dx: dir.x * distanceM, dy: dir.y * distanceM };
 }
 
@@ -169,7 +169,8 @@ export const RULES: RuleDefinition[] = [
           const viaDoor = bathDoors.find(
             (door) => facingCheck(entry, door, { maxAngle: 22, maxDistance }).facing,
           );
-          if (direct.facing || viaDoor) {
+          // 已标记卫生间门时，以真实门洞作为可视入口；门洞移位后不应继续穿墙看见房间中心。
+          if ((bathDoors.length === 0 && direct.facing) || viaDoor) {
             const target = viaDoor ?? bath;
             // 玄关柜 / 屏风 / 短隔墙已阻断直视轴线，则不再计为问题
             if (lineBlocked(center(entry), center(target), barriers)) continue;
