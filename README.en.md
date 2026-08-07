@@ -1,12 +1,12 @@
 # AI 风水户型助手 · FengShui Layout Planner
 
-> A tool that combines traditional residential layout experience with modern spatial-design principles to provide **floor-plan analysis, furniture-placement suggestions, circulation optimization, and privacy / lighting-ventilation references**.
+> FengShui Layout Planner is an explainable floor-plan analysis and optimization tool combining **traditional residential-layout rules** with **modern spatial-design principles**. Fixed rules, geometry constraints, and traceable scores are used throughout—never random “AI scores.”
 >
-> This tool is **not** a fortune-telling service. It makes no promises about changing fate, guaranteeing health, or ensuring wealth. All outputs are objective observations about an existing layout and are for reference only.
-
-Positioning: **a traditional-living-culture and modern spatial-layout reference tool**.
+> Positioning: **a traditional-living-culture and modern spatial-layout reference tool**, not fortune telling and not construction-design software.
 
 [中文文档](./README.md)
+
+![FengShui Layout Planner home page](./docs/screenshots/home-desktop.png)
 
 ---
 
@@ -20,17 +20,57 @@ Positioning: **a traditional-living-culture and modern spatial-layout reference 
 | Runtime | Next.js + browser; data persisted locally (localStorage) |
 | Core constraint | Scores are produced by a **fixed rule engine** — never by a random LLM score. |
 
-Highlights:
+Core capabilities:
 
-- Upload a JPG/PNG plan, or use built-in samples (no upload required).
-- Set north direction, entry-door position, and scale.
-- Mark 18 element types (rooms / openings / furniture / screens) with drag, resize, rotate, rename, delete, undo/redo.
-- A deterministic rule engine produces an overall score and five-dimension scores.
-- Issues are annotated on the plan with traditional / modern explanations and suggestions.
-- Classify a wall as exterior, load-bearing, partition, or unknown; only an explicitly confirmed partition can be moved automatically.
-- Preview and explicitly apply distinct A/B/C candidates, including real shared-wall movement with synchronized room polygons; candidate scores are re-computed by the same rule engine.
-- Seven deterministic, independently switchable analysis layers with opacity, calculation basis, and before/after recomputation.
-- Versioned local persistence with safe migration/recovery; before / after comparison; printable report.
+- **18 deterministic rules** with traditional and modern explanations.
+- **Five-dimension scoring**: traditional layout, circulation, privacy, function, and lighting/ventilation.
+- **Visual plan editing** for rooms, openings, furniture, and screens, with drag/resize/rotate/rename/delete and undo/redo.
+- **Seven explainable layers**: issue heatmap, privacy sightlines, airflow, circulation, daylight, active/quiet zoning, and the traditional energy model.
+- **Furniture and door-opening optimization**, including offset openings, sealed former openings, and entry screens.
+- **Non-load-bearing wall optimization** with synchronized adjacent-room polygons, areas, doors, and windows.
+- **Distinct A/B/C candidates**: minimum change, balanced, and highest score.
+- **Before / after scenarios** with preview-first, atomic apply, undo, and redo.
+- **Local-first privacy**: no account, backend, paid API, or cloud upload; project data remains in browser localStorage.
+
+## Product screenshots
+
+These images are generated from the current v1.0.0 code in real Chrome through Playwright.
+
+| Visual editor | A/B/C optimization |
+| --- | --- |
+| ![Visual floor-plan editor](./docs/screenshots/editor-desktop.png) | ![A/B/C optimization candidates](./docs/screenshots/abc-optimization.png) |
+
+| Issue heatmap | Traditional energy model |
+| --- | --- |
+| ![Deterministic issue heatmap](./docs/screenshots/heatmap.png) | ![Traditional spatial energy model](./docs/screenshots/energy-model.png) |
+
+> The energy layer is a **traditional-cultural visualization model, not a physical energy measurement**.
+
+| Wall move before | Wall move after |
+| --- | --- |
+| ![Partition wall before movement](./docs/screenshots/wall-before.png) | ![Partition wall after movement](./docs/screenshots/wall-after.png) |
+
+![Mobile editor](./docs/screenshots/mobile-editor.png)
+
+## Structural Optimization
+
+Users can classify each wall as:
+
+- `Exterior` — immutable.
+- `Load-bearing` — never moved automatically.
+- `Partition` — an explicitly confirmed non-load-bearing wall eligible for safe search.
+- `Unknown` — conceptual advice only; never moved automatically.
+
+Only an explicitly marked `Partition` can be moved by the optimizer. Structural optimization can:
+
+- move a shared non-load-bearing wall with marked rooms on both sides;
+- synchronize adjacent-room `Point[]` polygons, areas, centroids, and bounds;
+- keep attached doors and windows on the moved wall;
+- validate minimum room area/width, self-intersection, overlap, openings, wet-zone position, and reachability;
+- rerun all 18 rules, five-dimension scoring, and seven analysis layers; and
+- generate preview-first A/B/C candidates with wall distances, area changes, issue differences, and relative costs.
+
+Structural candidates are conceptual spatial proposals, not construction drawings.
 
 ## Quick start
 
@@ -99,9 +139,10 @@ Next.js 16 (App Router) · React 19 · TypeScript · Tailwind CSS v4 · react-ko
 ## Current boundaries
 
 - The structure model is inferred from user-marked room boundaries and openings; it is not CAD/BIM, structural recognition, or an automatic load-bearing assessment.
-- Automated wall movement is limited to axis-aligned shared segments with marked rooms on both sides and an explicit `partition` classification. The search range is 0.15–0.8 m; both room polygons, areas, centroids, attached doors, and windows are synchronized.
+- v1.0.0 wall movement is limited to axis-aligned shared segments with marked rooms on both sides and an explicit `partition` classification. The search range is 0.15–0.8 m; both room polygons, areas, centroids, attached doors, and windows are synchronized.
 - `exterior` and `load-bearing` walls are immutable; `unknown` walls allow conceptual advice only. Diagonal/curved walls, compound junctions, and one-sided wall segments are not moved automatically.
-- Candidates validate minimum room area/width, self-intersection/overlap, opening attachment, wet-zone position, reachability, and newly introduced high-severity issues. These checks are reference-grade geometry, not structural, fire-egress, accessibility, or construction approval.
+- Diagonal walls, curved walls, complex T-junctions, one-sided corridor walls, and CAD/BIM input are not supported yet.
+- Candidates validate minimum room area/width, self-intersection/overlap, opening attachment, wet-zone position, reachability, and newly introduced high-severity issues. These checks are reference-grade geometry, not fire, utilities, structural engineering, accessibility, or construction approval.
 - A qualified architect/structural designer and property management must confirm all real work. Candidates are not construction drawings.
 - localStorage is convenient persistence, not a durable backup.
 
@@ -111,4 +152,8 @@ Next.js 16 (App Router) · React 19 · TypeScript · Tailwind CSS v4 · react-ko
 
 ## Disclaimer
 
-This tool is for **reference and analysis only**. All scores and suggestions are computed by a fixed rule engine from user-marked input; they represent neither superstition nor metaphysics, and do not promise to change fate, health, or wealth. For actual renovation, structure changes, or load-bearing wall removal, consult qualified building/design/construction professionals.
+- The traditional energy layer is a cultural visualization model, **not a physical energy measurement**.
+- Scores and candidates depend on the completeness and accuracy of user-marked rooms, openings, scale, and boundaries.
+- Structural changes are conceptual candidates. This tool does not provide construction-grade architecture, structural calculations, fire review, or utility design.
+- This is not fortune telling and makes no promise about changing fate or guaranteeing health or wealth.
+- Actual work must be reviewed by qualified architects, structural designers, property management, or other relevant professionals.

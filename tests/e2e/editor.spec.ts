@@ -3,6 +3,7 @@ import path from 'node:path';
 import { expect, test, type Page } from '@playwright/test';
 
 const STORAGE_KEY = 'fengshui-layout-planner:v1';
+const DOCS_SCREENSHOTS_DIR = path.join(process.cwd(), 'docs', 'screenshots');
 
 interface StoredElement {
   id: string;
@@ -119,8 +120,30 @@ function captureRuntimeProblems(page: Page) {
 
 test('候选、七图层、结构应用、原子撤销、刷新和报告完整闭环', async ({ page }, testInfo) => {
   const runtimeProblems = captureRuntimeProblems(page);
+  const captureDesktopDocs = testInfo.project.name === 'desktop-1440x900';
+  const captureMobileDocs = testInfo.project.name === 'mobile-390x844';
+  if (captureDesktopDocs) {
+    mkdirSync(DOCS_SCREENSHOTS_DIR, { recursive: true });
+    await page.goto('/');
+    await page.evaluate(() => window.localStorage.clear());
+    await page.reload();
+    await expect(page.getByRole('heading', { name: /重新审视你的户型布局/ })).toBeVisible();
+    await page.screenshot({ path: path.join(DOCS_SCREENSHOTS_DIR, 'home-desktop.png') });
+  }
   await loadFirstSample(page);
+  if (captureDesktopDocs) {
+    await page.screenshot({ path: path.join(DOCS_SCREENSHOTS_DIR, 'editor-desktop.png') });
+  }
+  if (captureMobileDocs) {
+    mkdirSync(DOCS_SCREENSHOTS_DIR, { recursive: true });
+    await page.screenshot({ path: path.join(DOCS_SCREENSHOTS_DIR, 'mobile-editor.png') });
+  }
   const markedWallId = await markSharedWallAsPartition(page);
+  if (captureDesktopDocs) {
+    await page.locator('[data-testid="plan-canvas"] .konvajs-content').screenshot({
+      path: path.join(DOCS_SCREENSHOTS_DIR, 'wall-before.png'),
+    });
+  }
 
   const expand = page.getByRole('button', { name: '展开' });
   if (await expand.isVisible()) await expand.click();
@@ -134,6 +157,18 @@ test('候选、七图层、结构应用、原子撤销、刷新和报告完整�
     '动区与静区分布图',
     '阳宅空间能量示意图',
   ];
+  if (captureDesktopDocs) {
+    await page.getByLabel('风水问题热力图').check();
+    await page.locator('[data-testid="plan-canvas"] .konvajs-content').screenshot({
+      path: path.join(DOCS_SCREENSHOTS_DIR, 'heatmap.png'),
+    });
+    await page.getByLabel('风水问题热力图').uncheck();
+    await page.getByLabel('阳宅空间能量示意图').check();
+    await page.locator('[data-testid="plan-canvas"] .konvajs-content').screenshot({
+      path: path.join(DOCS_SCREENSHOTS_DIR, 'energy-model.png'),
+    });
+    await page.getByLabel('阳宅空间能量示意图').uncheck();
+  }
   for (const name of layerNames) {
     const checkbox = page.getByLabel(name);
     await checkbox.check();
@@ -181,6 +216,10 @@ test('候选、七图层、结构应用、原子撤销、刷新和报告完整�
   expect(canvasLayerCountWithCandidate).toBeGreaterThan(canvasLayerCountBeforeCandidate);
   expect(canvasLayerCountWithCandidate).toBeLessThanOrEqual(5);
 
+  if (captureDesktopDocs) {
+    await page.screenshot({ path: path.join(DOCS_SCREENSHOTS_DIR, 'abc-optimization.png') });
+  }
+
   const screenshotsDir = path.join(process.cwd(), 'tests', 'screenshots');
   mkdirSync(screenshotsDir, { recursive: true });
   await page.screenshot({
@@ -217,6 +256,14 @@ test('候选、七图层、结构应用、原子撤销、刷新和报告完整�
   await expect(redo).toBeEnabled();
   await redo.click();
   await expect.poll(async () => Boolean((await persisted(page)).state.projects[projectId].scenarios.after.structure)).toBe(true);
+
+  if (captureDesktopDocs) {
+    for (const name of layerNames) await page.getByLabel(name).uncheck();
+    await page.locator('[data-testid="plan-canvas"] .konvajs-content').screenshot({
+      path: path.join(DOCS_SCREENSHOTS_DIR, 'wall-after.png'),
+    });
+    for (const name of layerNames) await page.getByLabel(name).check();
+  }
 
   expect(await page.evaluate(() => document.documentElement.scrollWidth <= window.innerWidth + 1)).toBe(true);
   await page.screenshot({ path: path.join(screenshotsDir, `${testInfo.project.name}-final.png`), fullPage: true });
