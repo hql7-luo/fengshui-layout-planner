@@ -269,7 +269,7 @@ export interface Zone {
   movable: boolean;
 }
 
-/** 户型结构模型。loadBearingMarked 表示用户已标记承重墙，未标记时方案仅作概念候选 */
+/** 户型结构模型。loadBearingMarked 只表示用户已完成过墙体属性确认，不授权任何具体墙段移动 */
 export interface StructureModel {
   walls: Wall[];
   doors: DoorOpening[];
@@ -343,7 +343,7 @@ export interface CandidatePlan {
   title: string;
   problemType: ProblemType;
   feasible: boolean;
-  /** 不可行时的具体原因，例如「未标记承重墙 / 房间尺寸不足 / 湿区不可移动 / 通道宽度不合格 / 没有足够墙面移动门洞」 */
+  /** 不可行时的具体原因，例如「未完成墙体属性确认 / 房间尺寸不足 / 湿区不可移动 / 通道宽度不合格 / 没有足够墙面移动门洞」 */
   infeasibleReason?: string;
   modifications: PlanModification[];
   /** 应用后的元素布局（原始不会被覆盖，需用户点击「应用方案」） */
@@ -365,7 +365,7 @@ export interface CandidatePlan {
   /** 由改动项确定性计算的相对成本点数；只用于方案比较，不是施工报价 */
   changeCost: number;
   risks: string[];
-  /** 用户未标记承重墙时为 true，方案仅作概念候选、不可直接施工 */
+  /** 用户未完成墙体属性确认时为 true，方案仅作概念候选、不可直接施工 */
   conceptOnly: boolean;
 }
 

@@ -6,11 +6,12 @@ import {
   polygonOverlapArea,
   roomsConnected,
 } from '@/lib/geometry';
-import { buildStructureFromElements, generateCandidatePlans, isPointOnWall } from '@/lib/optimizer';
+import { generateCandidatePlans, isPointOnWall } from '@/lib/optimizer';
 import { analyzePlan } from '@/lib/rules/engine';
-import { movePartitionWall, roomPolygon } from '@/lib/structural-geometry';
-import type { PlanElement, StructureModel, WallKind } from '@/lib/types';
+import { deriveWallsFromRooms, movePartitionWall, roomPolygon } from '@/lib/structural-geometry';
+import type { PlanElement, StructureModel, Wall, WallKind } from '@/lib/types';
 import { longCorridorApartment } from '@/lib/verify-samples';
+import { explicitlyClassifiedStructure } from './helpers/structure';
 
 const PPM = 100;
 const OPTIONS = { pixelsPerMeter: PPM, northAngle: 0, canvas: { width: 900, height: 600 } };
@@ -23,7 +24,7 @@ function fixture(): { elements: PlanElement[]; structure: StructureModel; wallId
     { id: 'door', type: 'room_door', name: '房门', x: 400, y: 200, width: 90, height: 18, rotation: 90 },
     { id: 'window', type: 'window', name: '内窗', x: 400, y: 80, width: 100, height: 12, rotation: 90 },
   ];
-  const structure = buildStructureFromElements(elements, true, PPM);
+  const structure = explicitlyClassifiedStructure(elements, PPM);
   const wall = structure.walls.find((candidate) => candidate.adjacentRooms[0] && candidate.adjacentRooms[1]);
   if (!wall) throw new Error('测试夹具缺少共享墙');
   return { elements, structure, wallId: wall.id };
@@ -41,13 +42,35 @@ function withKind(structure: StructureModel, wallId: string, kind: WallKind): St
   return copy;
 }
 
+function collinearOverlap(a: Wall, b: Wall): number {
+  const aHorizontal = Math.abs(a.y2 - a.y1) < 0.01;
+  const bHorizontal = Math.abs(b.y2 - b.y1) < 0.01;
+  const aVertical = Math.abs(a.x2 - a.x1) < 0.01;
+  const bVertical = Math.abs(b.x2 - b.x1) < 0.01;
+  if (aHorizontal && bHorizontal && Math.abs(a.y1 - b.y1) < 0.01) {
+    return Math.max(0, Math.min(Math.max(a.x1, a.x2), Math.max(b.x1, b.x2)) -
+      Math.max(Math.min(a.x1, a.x2), Math.min(b.x1, b.x2)));
+  }
+  if (aVertical && bVertical && Math.abs(a.x1 - b.x1) < 0.01) {
+    return Math.max(0, Math.min(Math.max(a.y1, a.y2), Math.max(b.y1, b.y2)) -
+      Math.max(Math.min(a.y1, a.y2), Math.min(b.y1, b.y2)));
+  }
+  return 0;
+}
+
+function adjacency(wall: Wall): string {
+  return wall.adjacentRooms.filter(Boolean).sort().join('|');
+}
+
 describe('真实共享墙移动 · 几何与安全约束', () => {
   it('1. partition wall 可以移动且原输入不被修改', () => {
     const { elements, structure, wallId } = fixture();
     const snapshot = structuredClone({ elements, structure });
     const moved = movePartitionWall(elements, structure, wallId, 0.4, PPM);
     expect(moved.feasible).toBe(true);
-    expect(moved.structure.walls.find((wall) => wall.id === wallId)?.x1).toBe(440);
+    expect(moved.structure.walls.find((wall) =>
+      wall.kind === 'partition' && wall.adjacentRooms[0] && wall.adjacentRooms[1],
+    )?.x1).toBe(440);
     expect({ elements, structure }).toEqual(snapshot);
   });
 
@@ -88,9 +111,9 @@ describe('真实共享墙移动 · 几何与安全约束', () => {
   it('7. 墙上的门洞和窗洞与画布元素同步依附新墙', () => {
     const { elements, structure, wallId } = fixture();
     const moved = movePartitionWall(elements, structure, wallId, 0.4, PPM);
-    const wall = moved.structure.walls.find((candidate) => candidate.id === wallId)!;
     const door = moved.structure.doors.find((opening) => opening.linkedElementId === 'door')!;
     const window = moved.structure.windows.find((opening) => opening.linkedElementId === 'window')!;
+    const wall = moved.structure.walls.find((candidate) => candidate.id === door.wallId)!;
     expect(isPointOnWall(door.point, wall, 0.01)).toBe(true);
     expect(isPointOnWall(window.point, wall, 0.01)).toBe(true);
     expect(moved.elements.find((element) => element.id === 'door')?.x).toBe(440);
@@ -125,8 +148,10 @@ describe('真实共享墙移动 · 几何与安全约束', () => {
     const { elements, structure, wallId } = fixture();
     const exteriorBefore = structure.walls.filter((wall) => wall.kind === 'exterior');
     const moved = movePartitionWall(elements, structure, wallId, 0.4, PPM);
-    const wall = moved.structure.walls.find((candidate) => candidate.id === wallId)!;
-    const others = moved.structure.walls.filter((candidate) => candidate.id !== wallId);
+    const wall = moved.structure.walls.find((candidate) =>
+      candidate.kind === 'partition' && candidate.adjacentRooms[0] && candidate.adjacentRooms[1],
+    )!;
+    const others = moved.structure.walls.filter((candidate) => candidate.id !== wall.id);
     expect(others.some((candidate) => isPointOnWall({ x: wall.x1, y: wall.y1 }, candidate, 0.01))).toBe(true);
     expect(others.some((candidate) => isPointOnWall({ x: wall.x2, y: wall.y2 }, candidate, 0.01))).toBe(true);
     expect(moved.structure.walls.filter((candidate) => candidate.kind === 'exterior')).toEqual(exteriorBefore);
@@ -137,7 +162,7 @@ describe('真实共享墙移动 · 几何与安全约束', () => {
     const compact = elements.map((element) => element.id === 'bedroom'
       ? { ...element, x: 510, width: 220 }
       : element);
-    const structure = buildStructureFromElements(compact, true, PPM);
+    const structure = explicitlyClassifiedStructure(compact, PPM);
     const wall = structure.walls.find((candidate) => candidate.adjacentRooms[0] && candidate.adjacentRooms[1])!;
     const moved = movePartitionWall(compact, structure, wall.id, 0.3, PPM);
     expect(moved.feasible).toBe(false);
@@ -150,12 +175,50 @@ describe('真实共享墙移动 · 几何与安全约束', () => {
       movePartitionWall(elements, structure, wallId, 0.4, PPM),
     );
   });
+
+  it('14. 移动后从 polygon 重建拓扑，connector 为单侧 unknown 且无重复共线墙段', () => {
+    const { elements, structure, wallId } = fixture();
+    const moved = movePartitionWall(elements, structure, wallId, 0.4, PPM);
+    expect(moved.feasible).toBe(true);
+    const topology = deriveWallsFromRooms(moved.elements).filter((wall) => wall.kind !== 'exterior');
+    for (const wall of topology) {
+      const actual = moved.structure.walls.find((candidate) => candidate.id === wall.id);
+      expect(actual, wall.id).toBeTruthy();
+      expect(adjacency(actual!)).toBe(adjacency(wall));
+    }
+    const connectors = moved.structure.walls.filter((wall) => wall.adjacentRooms.filter(Boolean).length < 2);
+    expect(connectors.every((wall) => wall.kind !== 'partition' && wall.movable === false)).toBe(true);
+    expect(moved.structure.walls.some((wall) => wall.id.includes('connector'))).toBe(false);
+    for (let index = 0; index < moved.structure.walls.length; index += 1) {
+      for (let other = index + 1; other < moved.structure.walls.length; other += 1) {
+        expect(collinearOverlap(moved.structure.walls[index], moved.structure.walls[other])).toBe(0);
+      }
+    }
+    const exteriors = moved.structure.walls.filter((wall) => wall.kind === 'exterior');
+    const partitions = moved.structure.walls.filter((wall) => wall.kind === 'partition');
+    expect(partitions.every((partition) =>
+      exteriors.every((exterior) => collinearOverlap(partition, exterior) === 0)
+    )).toBe(true);
+  });
+
+  it('15. 同一显式 partition 可连续移动两轮，且不会选中虚假 connector', () => {
+    const { elements, structure, wallId } = fixture();
+    const first = movePartitionWall(elements, structure, wallId, 0.3, PPM);
+    expect(first.feasible).toBe(true);
+    const movableAfterFirst = first.structure.walls.filter((wall) => wall.kind === 'partition' && wall.movable);
+    expect(movableAfterFirst).toHaveLength(1);
+    expect(movableAfterFirst[0].adjacentRooms.filter(Boolean)).toHaveLength(2);
+    const second = movePartitionWall(first.elements, first.structure, movableAfterFirst[0].id, -0.3, PPM);
+    expect(second.feasible).toBe(true);
+    expect(second).toEqual(movePartitionWall(first.elements, first.structure, movableAfterFirst[0].id, -0.3, PPM));
+    expect(second.structure.walls.filter((wall) => wall.kind === 'partition' && wall.movable)).toHaveLength(1);
+  });
 });
 describe('真实墙移动 · 优化器、评分和七图层', () => {
-  it('14. 长走廊案例的可行 B/C 包含真实墙移动并提高规则评分', () => {
+  it('16. 长走廊案例的可行 B/C 包含真实墙移动并提高规则评分', () => {
     const elements = longCorridorApartment();
     const options = { pixelsPerMeter: 75, northAngle: 0, canvas: { width: 1080, height: 840 } };
-    const structure = buildStructureFromElements(elements, true, 75);
+    const structure = explicitlyClassifiedStructure(elements, 75);
     const result = generateCandidatePlans({ elements, structure, options });
     const plan = result.plans.find((candidate) =>
       candidate.feasible && candidate.modifications.some((modification) => modification.kind === 'move-wall'),
@@ -165,7 +228,7 @@ describe('真实墙移动 · 优化器、评分和七图层', () => {
     expect(plan!.solvedIssues.some((issue) => issue.ruleId === 'long-corridor')).toBe(true);
   });
 
-  it('15. before/after 的七个图层按新 polygon 重新计算', () => {
+  it('17. before/after 的七个图层按新 polygon 重新计算', () => {
     const { elements, structure, wallId } = fixture();
     const moved = movePartitionWall(elements, structure, wallId, 0.4, PPM);
     const input = (planElements: PlanElement[]) => ({
@@ -179,13 +242,43 @@ describe('真实墙移动 · 优化器、评分和七图层', () => {
     expect(JSON.stringify(after)).not.toEqual(JSON.stringify(before));
   });
 
-  it('16. 候选预测评分与 projectedElements 实际重算一致', () => {
+  it('18. 候选预测评分与 projectedElements 实际重算一致', () => {
     const elements = longCorridorApartment();
     const options = { pixelsPerMeter: 75, northAngle: 0, canvas: { width: 1080, height: 840 } };
-    const structure = buildStructureFromElements(elements, true, 75);
+    const structure = explicitlyClassifiedStructure(elements, 75);
     const result = generateCandidatePlans({ elements, structure, options });
     for (const plan of result.plans.filter((candidate) => candidate.feasible)) {
       expect(analyzePlan(plan.projectedElements, options).overall).toBe(plan.predictedScore);
+    }
+  });
+
+  it('19. 首轮优化应用后可再次确定性生成候选，移墙目标仍为真实共享墙', () => {
+    const elements = longCorridorApartment();
+    const options = { pixelsPerMeter: 75, northAngle: 0, canvas: { width: 1080, height: 840 } };
+    const structure = explicitlyClassifiedStructure(elements, 75);
+    const first = generateCandidatePlans({ elements, structure, options });
+    const applied = first.plans.find((candidate) =>
+      candidate.feasible && candidate.modifications.some((modification) => modification.kind === 'move-wall'),
+    )!;
+    expect(applied).toBeTruthy();
+    const second = generateCandidatePlans({
+      elements: applied.projectedElements,
+      structure: applied.projectedStructure,
+      options,
+    });
+    const repeated = generateCandidatePlans({
+      elements: applied.projectedElements,
+      structure: applied.projectedStructure,
+      options,
+    });
+    expect(second).toEqual(repeated);
+    for (const movedWall of second.plans.flatMap((plan) =>
+      plan.modifications.flatMap((modification) => modification.movedWalls ?? [])
+    )) {
+      const target = applied.projectedStructure.walls.find((wall) => wall.id === movedWall.wallId);
+      expect(target?.kind).toBe('partition');
+      expect(target?.movable).toBe(true);
+      expect(target?.adjacentRooms.filter(Boolean)).toHaveLength(2);
     }
   });
 });

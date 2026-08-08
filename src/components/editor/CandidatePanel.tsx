@@ -74,7 +74,7 @@ export function CandidatePanel() {
                 modification.kind !== 'furniture-fix'
               ) && (
             <p className="rounded bg-amber-50 px-2 py-1 text-amber-700">
-              未标记承重墙，本方案为概念候选，不可直接施工。
+              未完成墙体属性确认，本方案为概念候选，不可直接施工。
             </p>
           )}
           {!activePlan.feasible ? (

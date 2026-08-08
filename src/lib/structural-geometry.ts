@@ -247,6 +247,200 @@ function pointOnWall(point: Point, wall: Wall, tolerancePx: number): boolean {
   return pointToSegmentDistance(point, { x: wall.x1, y: wall.y1 }, { x: wall.x2, y: wall.y2 }) <= tolerancePx;
 }
 
+type WallAxis = 'horizontal' | 'vertical' | 'diagonal';
+
+function wallAxis(wall: Wall): WallAxis {
+  if (Math.abs(wall.y2 - wall.y1) <= GEOMETRY_TOLERANCE_PX) return 'horizontal';
+  if (Math.abs(wall.x2 - wall.x1) <= GEOMETRY_TOLERANCE_PX) return 'vertical';
+  return 'diagonal';
+}
+
+function wallCoordinate(wall: Wall, axis: Exclude<WallAxis, 'diagonal'>): number {
+  return axis === 'horizontal' ? (wall.y1 + wall.y2) / 2 : (wall.x1 + wall.x2) / 2;
+}
+
+function wallInterval(wall: Wall, axis: Exclude<WallAxis, 'diagonal'>): [number, number] {
+  return axis === 'horizontal'
+    ? [Math.min(wall.x1, wall.x2), Math.max(wall.x1, wall.x2)]
+    : [Math.min(wall.y1, wall.y2), Math.max(wall.y1, wall.y2)];
+}
+
+function sameAdjacentRooms(a: Wall, b: Wall): boolean {
+  const normalized = (wall: Wall) => wall.adjacentRooms.filter((id): id is string => Boolean(id)).sort().join('|');
+  return normalized(a) === normalized(b);
+}
+
+function sameWallSegment(a: Wall, b: Wall): boolean {
+  const axis = wallAxis(a);
+  if (axis !== wallAxis(b)) return false;
+  if (axis === 'diagonal') {
+    const direct = Math.hypot(a.x1 - b.x1, a.y1 - b.y1) <= GEOMETRY_TOLERANCE_PX &&
+      Math.hypot(a.x2 - b.x2, a.y2 - b.y2) <= GEOMETRY_TOLERANCE_PX;
+    const reverse = Math.hypot(a.x1 - b.x2, a.y1 - b.y2) <= GEOMETRY_TOLERANCE_PX &&
+      Math.hypot(a.x2 - b.x1, a.y2 - b.y1) <= GEOMETRY_TOLERANCE_PX;
+    return direct || reverse;
+  }
+  const [aStart, aEnd] = wallInterval(a, axis);
+  const [bStart, bEnd] = wallInterval(b, axis);
+  return Math.abs(wallCoordinate(a, axis) - wallCoordinate(b, axis)) <= GEOMETRY_TOLERANCE_PX &&
+    Math.abs(aStart - bStart) <= GEOMETRY_TOLERANCE_PX &&
+    Math.abs(aEnd - bEnd) <= GEOMETRY_TOLERANCE_PX;
+}
+
+function wallCoversSegment(source: Wall, candidate: Wall): boolean {
+  const axis = wallAxis(source);
+  if (axis !== wallAxis(candidate)) return false;
+  if (axis === 'diagonal') return sameWallSegment(source, candidate);
+  if (Math.abs(wallCoordinate(source, axis) - wallCoordinate(candidate, axis)) > GEOMETRY_TOLERANCE_PX) {
+    return false;
+  }
+  const [sourceStart, sourceEnd] = wallInterval(source, axis);
+  const [candidateStart, candidateEnd] = wallInterval(candidate, axis);
+  return candidateStart >= sourceStart - GEOMETRY_TOLERANCE_PX &&
+    candidateEnd <= sourceEnd + GEOMETRY_TOLERANCE_PX;
+}
+
+function collinearOverlapLength(a: Wall, b: Wall): number {
+  const axis = wallAxis(a);
+  if (axis === 'diagonal' || axis !== wallAxis(b)) return 0;
+  if (Math.abs(wallCoordinate(a, axis) - wallCoordinate(b, axis)) > GEOMETRY_TOLERANCE_PX) return 0;
+  const [aStart, aEnd] = wallInterval(a, axis);
+  const [bStart, bEnd] = wallInterval(b, axis);
+  return Math.max(0, Math.min(aEnd, bEnd) - Math.max(aStart, bStart));
+}
+
+function translatedWall(wall: Wall, delta: Point): Wall {
+  return {
+    ...wall,
+    x1: wall.x1 + delta.x,
+    y1: wall.y1 + delta.y,
+    x2: wall.x2 + delta.x,
+    y2: wall.y2 + delta.y,
+  };
+}
+
+/**
+ * room polygon 是墙体移动后的拓扑真值。重新从 polygon 推导原子墙段，然后只恢复：
+ * 1. 几何与相邻关系仍匹配的无关显式分类；2. 被移动目标在新位置上的 partition 授权。
+ * 这样端部连接段会自然成为单侧 unknown，不会继承共享墙的 movable 属性。
+ */
+function rebuildTopologyAfterMove(
+  originalElements: PlanElement[],
+  nextElements: PlanElement[],
+  originalStructure: StructureModel,
+  movedWall: Wall,
+  delta: Point,
+): { walls?: Wall[]; targetWalls?: Wall[]; reason?: string } {
+  const exteriorWalls = originalStructure.walls
+    .filter((wall) => wall.kind === 'exterior')
+    .map((wall) => ({ ...wall, adjacentRooms: [...wall.adjacentRooms] as [string | null, string | null] }));
+  const beforeDerived = deriveWallsFromRooms(originalElements);
+  const afterDerived = deriveWallsFromRooms(nextElements).filter((wall) => wall.kind !== 'exterior');
+  const movedGeometry = translatedWall(movedWall, delta);
+
+  const explicitWalls = originalStructure.walls
+    .filter((wall) => wall.id !== movedWall.id && (wall.kind === 'partition' || wall.kind === 'load-bearing'))
+    .sort((a, b) => {
+      if (a.kind !== b.kind) return a.kind === 'load-bearing' ? -1 : 1;
+      return a.id.localeCompare(b.id);
+    });
+
+  const rebuilt = afterDerived.map((derived) => {
+    if (sameAdjacentRooms(derived, movedWall) && wallCoversSegment(movedGeometry, derived)) {
+      return { ...derived, kind: 'partition' as const, movable: true, thicknessM: movedWall.thicknessM };
+    }
+    const prior = explicitWalls.find((candidate) =>
+      sameAdjacentRooms(candidate, derived) && wallCoversSegment(candidate, derived),
+    );
+    if (!prior) return derived;
+    return {
+      ...derived,
+      kind: prior.kind,
+      movable: prior.kind === 'partition',
+      thicknessM: prior.thicknessM,
+    };
+  });
+
+  const targetWalls = rebuilt.filter((candidate) =>
+    candidate.kind === 'partition' &&
+    candidate.movable &&
+    sameAdjacentRooms(candidate, movedWall) &&
+    wallCoversSegment(movedGeometry, candidate),
+  );
+  if (!targetWalls.length) return { reason: '移动后无法从房间 polygon 恢复目标共享墙' };
+
+  for (const candidate of rebuilt) {
+    if (exteriorWalls.some((exterior) => collinearOverlapLength(candidate, exterior) > GEOMETRY_TOLERANCE_PX)) {
+      return { reason: '移动后的内墙与外墙发生重叠' };
+    }
+  }
+
+  // 房间边界之外的独立屏风/短墙不应因拓扑重建而丢失。
+  // 与移动前 polygon 边界重合的墙一律视为拓扑墙，避免保留旧 connector。
+  const auxiliaryWalls = originalStructure.walls
+    .filter((wall) => wall.kind !== 'exterior' && wall.id !== movedWall.id)
+    .filter((wall) => !beforeDerived.some((derived) => sameWallSegment(derived, wall)))
+    .filter((wall) => !rebuilt.some((derived) => collinearOverlapLength(derived, wall) > GEOMETRY_TOLERANCE_PX))
+    .map((wall) => ({ ...wall, adjacentRooms: [...wall.adjacentRooms] as [string | null, string | null] }));
+
+  const walls = [
+    ...exteriorWalls,
+    ...rebuilt.sort((a, b) => a.id.localeCompare(b.id)),
+    ...auxiliaryWalls.sort((a, b) => a.id.localeCompare(b.id)),
+  ];
+  for (let index = 0; index < walls.length; index += 1) {
+    for (let other = index + 1; other < walls.length; other += 1) {
+      if (collinearOverlapLength(walls[index], walls[other]) > GEOMETRY_TOLERANCE_PX) {
+        return { reason: `移动后产生重复共线墙段：${walls[index].id} / ${walls[other].id}` };
+      }
+    }
+  }
+  return { walls, targetWalls };
+}
+
+function reattachOpenings(
+  structure: StructureModel,
+  originalStructure: StructureModel,
+  movedWall: Wall,
+  targetWalls: Wall[],
+  ppm: number,
+): string | null {
+  for (const wall of structure.walls) {
+    wall.hasDoor = false;
+    wall.hasWindow = false;
+  }
+  const attach = (opening: StructureModel['doors'][number] | StructureModel['windows'][number]): Wall | undefined => {
+    const previousWall = originalStructure.walls.find((candidate) => candidate.id === opening.wallId);
+    return structure.walls
+      .filter((candidate) => pointOnWall(opening.point, candidate, 0.03 * ppm))
+      .sort((a, b) => {
+        const score = (candidate: Wall): number => {
+          if (previousWall?.id === movedWall.id) return targetWalls.some((target) => target.id === candidate.id) ? 0 : 20;
+          if (candidate.id === previousWall?.id) return 0;
+          if (previousWall && sameAdjacentRooms(candidate, previousWall) && candidate.kind === previousWall.kind) return 1;
+          if (previousWall?.kind === candidate.kind) return 2;
+          return 10;
+        };
+        return score(a) - score(b) || a.id.localeCompare(b.id);
+      })[0];
+  };
+
+  for (const door of structure.doors) {
+    const wall = attach(door);
+    if (!wall) return `门洞「${door.id}」移动后无法依附合法墙段`;
+    door.wallId = wall.id;
+    door.movable = door.kind !== 'entry' && wall.kind === 'partition' && wall.movable;
+    wall.hasDoor = true;
+  }
+  for (const window of structure.windows) {
+    const wall = attach(window);
+    if (!wall) return `窗洞「${window.id}」移动后无法依附合法墙段`;
+    window.wallId = wall.id;
+    wall.hasWindow = true;
+  }
+  return null;
+}
+
 function validateRoomGeometry(
   elements: PlanElement[],
   structure: StructureModel,
@@ -330,8 +524,9 @@ export interface MoveWallResult {
 }
 
 /**
- * 真正移动一段共享 partition wall。房间 polygon 通过“旧共享边 → 两端连接段 → 新共享边”同步更新，
- * 墙上的门窗与对应元素整体平移；函数不修改输入，并在返回前完成几何和连通性校验。
+ * 真正移动一段共享 partition wall。房间 polygon 同步更新后，整体重建原子墙段拓扑；
+ * 墙上的门窗与对应元素整体平移并重新依附真实墙段。函数不修改输入，并在返回前完成几何、
+ * 重叠墙段、门窗依附与连通性校验。
  */
 export function movePartitionWall(
   elements: PlanElement[],
@@ -396,36 +591,13 @@ export function movePartitionWall(
     });
   }
 
-  const nextStructure = cloneStructureModel(originalStructure);
-  const target = nextStructure.walls.find((candidate) => candidate.id === wall.id)!;
   const from: [Point, Point] = [{ x: wall.x1, y: wall.y1 }, { x: wall.x2, y: wall.y2 }];
-  target.x1 += delta.x;
-  target.y1 += delta.y;
-  target.x2 += delta.x;
-  target.y2 += delta.y;
-  const to: [Point, Point] = [{ x: target.x1, y: target.y1 }, { x: target.x2, y: target.y2 }];
-  const connectorBase = `${wall.id}-connector-${distanceM.toFixed(2).replace('-', 'n')}`;
-  const connectors: Wall[] = [
-    {
-      ...wall,
-      id: `${connectorBase}-a`,
-      x2: target.x1,
-      y2: target.y1,
-      hasDoor: false,
-      hasWindow: false,
-    },
-    {
-      ...wall,
-      id: `${connectorBase}-b`,
-      x1: wall.x2,
-      y1: wall.y2,
-      x2: target.x2,
-      y2: target.y2,
-      hasDoor: false,
-      hasWindow: false,
-    },
+  const movedGeometry = translatedWall(wall, delta);
+  const to: [Point, Point] = [
+    { x: movedGeometry.x1, y: movedGeometry.y1 },
+    { x: movedGeometry.x2, y: movedGeometry.y2 },
   ];
-  nextStructure.walls.push(...connectors.filter((connector) => wallLength(connector) > GEOMETRY_TOLERANCE_PX));
+  const nextStructure = cloneStructureModel(originalStructure);
 
   for (const opening of nextStructure.doors.filter((candidate) => candidate.wallId === wall.id)) {
     opening.point = { x: opening.point.x + delta.x, y: opening.point.y + delta.y };
@@ -447,6 +619,18 @@ export function movePartitionWall(
       }
     }
   }
+
+  const rebuilt = rebuildTopologyAfterMove(originalElements, nextElements, originalStructure, wall, delta);
+  if (!rebuilt.walls || !rebuilt.targetWalls) return failure(rebuilt.reason ?? '移动后墙体拓扑重建失败');
+  nextStructure.walls = rebuilt.walls;
+  const attachmentFailure = reattachOpenings(
+    nextStructure,
+    originalStructure,
+    wall,
+    rebuilt.targetWalls,
+    ppm,
+  );
+  if (attachmentFailure) return failure(attachmentFailure);
 
   const geometryFailure = validateRoomGeometry(nextElements, nextStructure, ppm);
   if (geometryFailure) return failure(geometryFailure);

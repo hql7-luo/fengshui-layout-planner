@@ -4,6 +4,7 @@ import { expect, test, type Page } from '@playwright/test';
 
 const STORAGE_KEY = 'fengshui-layout-planner:v1';
 const DOCS_SCREENSHOTS_DIR = path.join(process.cwd(), 'docs', 'screenshots');
+const UPDATE_SCREENSHOTS = process.env.UPDATE_SCREENSHOTS === '1';
 
 interface StoredElement {
   id: string;
@@ -120,8 +121,8 @@ function captureRuntimeProblems(page: Page) {
 
 test('候选、七图层、结构应用、原子撤销、刷新和报告完整闭环', async ({ page }, testInfo) => {
   const runtimeProblems = captureRuntimeProblems(page);
-  const captureDesktopDocs = testInfo.project.name === 'desktop-1440x900';
-  const captureMobileDocs = testInfo.project.name === 'mobile-390x844';
+  const captureDesktopDocs = UPDATE_SCREENSHOTS && testInfo.project.name === 'desktop-1440x900';
+  const captureMobileDocs = UPDATE_SCREENSHOTS && testInfo.project.name === 'mobile-390x844';
   if (captureDesktopDocs) {
     mkdirSync(DOCS_SCREENSHOTS_DIR, { recursive: true });
     await page.goto('/');
@@ -221,11 +222,13 @@ test('候选、七图层、结构应用、原子撤销、刷新和报告完整�
   }
 
   const screenshotsDir = path.join(process.cwd(), 'tests', 'screenshots');
-  mkdirSync(screenshotsDir, { recursive: true });
-  await page.screenshot({
-    path: path.join(screenshotsDir, `${testInfo.project.name}-wall-preview.png`),
-    fullPage: true,
-  });
+  if (UPDATE_SCREENSHOTS) {
+    mkdirSync(screenshotsDir, { recursive: true });
+    await page.screenshot({
+      path: path.join(screenshotsDir, `${testInfo.project.name}-wall-preview.png`),
+      fullPage: true,
+    });
+  }
 
   await page.reload();
   if (await page.getByRole('button', { name: '展开' }).isVisible()) {
@@ -266,7 +269,9 @@ test('候选、七图层、结构应用、原子撤销、刷新和报告完整�
   }
 
   expect(await page.evaluate(() => document.documentElement.scrollWidth <= window.innerWidth + 1)).toBe(true);
-  await page.screenshot({ path: path.join(screenshotsDir, `${testInfo.project.name}-final.png`), fullPage: true });
+  if (UPDATE_SCREENSHOTS) {
+    await page.screenshot({ path: path.join(screenshotsDir, `${testInfo.project.name}-final.png`), fullPage: true });
+  }
 
   await page.getByRole('link', { name: '生成分析报告' }).click();
   await expect(page.getByText(/AI 风水户型助手 · 户型布局分析报告/)).toBeVisible();

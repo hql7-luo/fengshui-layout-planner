@@ -152,8 +152,14 @@ npm run test:e2e
 # 7. 生产构建
 npm run build
 
-# 8. 预览生产构建
+# 8. 使用 next start 验证生产构建
+npm run test:e2e:prod
+
+# 9. 预览生产构建
 npm run start
+
+# 只有显式执行此命令才会更新 README 产品截图
+npm run screenshots:update
 ```
 
 ---

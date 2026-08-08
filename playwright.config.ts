@@ -1,5 +1,7 @@
 import { defineConfig, devices } from '@playwright/test';
 
+const PRODUCTION_MODE = process.env.PLAYWRIGHT_SERVER_MODE === 'production';
+
 export default defineConfig({
   testDir: './tests/e2e',
   timeout: 90_000,
@@ -17,7 +19,7 @@ export default defineConfig({
     video: 'off',
   },
   webServer: {
-    command: 'node node_modules/next/dist/bin/next dev --hostname 127.0.0.1 --port 3107',
+    command: `node node_modules/next/dist/bin/next ${PRODUCTION_MODE ? 'start' : 'dev'} --hostname 127.0.0.1 --port 3107`,
     url: 'http://127.0.0.1:3107',
     reuseExistingServer: false,
     timeout: 120_000,
