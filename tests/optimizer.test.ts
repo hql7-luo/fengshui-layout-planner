@@ -5,6 +5,7 @@ import { analyzePlan } from '@/lib/rules/engine';
 import { SAMPLE_PIXELS_PER_METER, SAMPLES, sampleElements } from '@/lib/samples';
 import { roomsConnected, roomsOverlap } from '@/lib/geometry';
 import type { ElementType, PlanElement, StructureModel } from '@/lib/types';
+import { explicitlyClassifiedStructure } from './helpers/structure';
 
 const PPM = SAMPLE_PIXELS_PER_METER;
 const OPTIONS = { pixelsPerMeter: PPM, northAngle: 0, canvas: { width: 1080, height: 840 } };
@@ -33,7 +34,7 @@ function m(
 function run(elements: PlanElement[], structure?: StructureModel) {
   return generateCandidatePlans({
     elements,
-    structure: structure ?? buildStructureFromElements(elements, true, PPM),
+    structure: structure ?? explicitlyClassifiedStructure(elements, PPM),
     options: OPTIONS,
   });
 }
@@ -65,6 +66,19 @@ function doorFacingDoor(): PlanElement[] {
 }
 
 describe('结构优化器 · 数据结构与结构模型', () => {
+  it('自动推导墙默认 unknown，loadBearingMarked=true 也不授予 movable', () => {
+    const els = entryFacingBathroom();
+    const unmarked = buildStructureFromElements(els, false, PPM);
+    const marked = buildStructureFromElements(els, true, PPM);
+    const derivedUnknown = unmarked.walls.filter((wall) => wall.kind === 'unknown');
+    expect(derivedUnknown.length).toBeGreaterThan(0);
+    expect(derivedUnknown.every((wall) => wall.movable === false)).toBe(true);
+    expect(marked.loadBearingMarked).toBe(true);
+    expect(marked.walls.filter((wall) => wall.kind !== 'exterior').every((wall) =>
+      wall.kind === 'unknown' && wall.movable === false
+    )).toBe(true);
+  });
+
   it('由元素推导出的结构模型包含四面外墙、门洞、窗洞与湿区', () => {
     const els = entryFacingBathroom();
     const s = buildStructureFromElements(els, true, PPM);
@@ -130,7 +144,7 @@ describe('验收 ④⑤⑥⑦ · 安全约束', () => {
   it('④ 任何方案都不移动承重墙', () => {
     for (const id of cases) {
       const els = sampleElements(id);
-      const original = buildStructureFromElements(els, true, PPM);
+      const original = explicitlyClassifiedStructure(els, PPM);
       // 人为加入一段承重墙
       original.walls.push({
         id: 'lb-1',
@@ -157,7 +171,7 @@ describe('验收 ④⑤⑥⑦ · 安全约束', () => {
   it('⑤ 任何方案都不移动外墙', () => {
     for (const id of cases) {
       const els = sampleElements(id);
-      const original = buildStructureFromElements(els, true, PPM);
+      const original = explicitlyClassifiedStructure(els, PPM);
       const res = run(els, original);
       for (const p of res.plans) {
         const before = original.walls.filter((w) => w.kind === 'exterior');
@@ -211,7 +225,7 @@ describe('验收 ⑧⑨ · 原始方案与稳定性', () => {
   it('⑧ 生成候选不会修改传入的原始元素与结构', () => {
     const els = entryFacingBathroom();
     const snapshot = JSON.stringify(els);
-    const structure = buildStructureFromElements(els, true, PPM);
+    const structure = explicitlyClassifiedStructure(els, PPM);
     const structSnapshot = JSON.stringify(structure);
     const res = run(els, structure);
     expect(JSON.stringify(els)).toBe(snapshot);
@@ -282,7 +296,7 @@ describe('验收 ⑩⑪ · 应用效果与撤销', () => {
 
   it('移位门洞在同一真实墙段创建新 opening，旧 opening 移除且墙段连续保留', () => {
     const els = entryFacingBathroom();
-    const structure = buildStructureFromElements(els, true, PPM);
+    const structure = explicitlyClassifiedStructure(els, PPM);
     const result = run(els, structure);
     const plan = result.plans.find((candidate) =>
       candidate.feasible && candidate.modifications.some((modification) => modification.sealedDoorIds?.length),

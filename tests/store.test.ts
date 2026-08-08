@@ -79,9 +79,24 @@ describe('Project store · 场景与结构原子历史', () => {
     const id = useProjectStore.getState().createSampleProject('entry-facing-bathroom')!;
     const project = useProjectStore.getState().projects[id];
     const shared = project.structure!.walls.find((wall) => wall.adjacentRooms[0] && wall.adjacentRooms[1])!;
+    const otherUnknownIds = project.structure!.walls
+      .filter((wall) => wall.kind === 'unknown' && wall.id !== shared.id)
+      .map((wall) => wall.id);
     expect(shared.kind).toBe('unknown');
+    useProjectStore.getState().setLoadBearingMarked(true);
+    expect(useProjectStore.getState().projects[id].scenarios.before.structure?.walls.find((wall) => wall.id === shared.id)).toMatchObject({
+      kind: 'unknown',
+      movable: false,
+    });
     useProjectStore.getState().setWallKind(shared.id, 'partition');
-    expect(useProjectStore.getState().projects[id].scenarios.before.structure?.walls.find((wall) => wall.id === shared.id)?.movable).toBe(true);
+    const explicitlyClassified = useProjectStore.getState().projects[id].scenarios.before.structure!;
+    expect(explicitlyClassified.walls.find((wall) => wall.id === shared.id)).toMatchObject({
+      kind: 'partition',
+      movable: true,
+    });
+    expect(explicitlyClassified.walls.filter((wall) => otherUnknownIds.includes(wall.id)).every((wall) =>
+      wall.kind === 'unknown' && wall.movable === false
+    )).toBe(true);
 
     useProjectStore.getState().generateCandidates();
     const plan = useProjectStore.getState().candidates!.plans.find((candidate) =>

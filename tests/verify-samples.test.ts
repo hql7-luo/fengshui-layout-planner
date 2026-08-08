@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest';
 import { analyzePlan } from '@/lib/rules/engine';
-import { generateCandidatePlans, buildStructureFromElements } from '@/lib/optimizer';
+import { generateCandidatePlans } from '@/lib/optimizer';
 import { computeLayers } from '@/lib/analysis-layers';
 import { ELEMENT_SPECS } from '@/lib/element-catalog';
 import {
@@ -12,6 +12,7 @@ import {
   complexPerformancePlan,
 } from '@/lib/verify-samples';
 import type { PlanElement } from '@/lib/types';
+import { explicitlyClassifiedStructure } from './helpers/structure';
 
 const PPM = 75;
 const OPTIONS = { pixelsPerMeter: PPM, northAngle: 0, canvas: { width: 1080, height: 840 } };
@@ -20,7 +21,7 @@ const LARGE_OPTIONS = { pixelsPerMeter: PPM, northAngle: 0, canvas: { width: 120
 function runOptimizer(els: PlanElement[], opts = OPTIONS) {
   return generateCandidatePlans({
     elements: els,
-    structure: buildStructureFromElements(els, true, PPM),
+    structure: explicitlyClassifiedStructure(els, PPM),
     options: opts,
   });
 }

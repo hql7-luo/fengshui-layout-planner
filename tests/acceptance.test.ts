@@ -5,6 +5,7 @@ import { analyzePlan } from '@/lib/rules/engine';
 import { aabb, roomsConnected, roomsOverlap } from '@/lib/geometry';
 import { SAMPLE_PIXELS_PER_METER, sampleElements } from '@/lib/samples';
 import type { ElementType, PlanElement } from '@/lib/types';
+import { explicitlyClassifiedStructure } from './helpers/structure';
 
 const PPM = SAMPLE_PIXELS_PER_METER;
 const OPTIONS = { pixelsPerMeter: PPM, northAngle: 0, canvas: { width: 1080, height: 840 } };
@@ -84,7 +85,7 @@ describe('评分上限逻辑 · 不因可优化性影响原始评分', () => {
 
   it('优化器在可优化场景下能解决问题并提升分数', () => {
     const els = buildScenario(2.4, 2.2);
-    const res = generateCandidatePlans({ elements: els, structure: buildStructureFromElements(els, true, PPM), options: OPTIONS });
+    const res = generateCandidatePlans({ elements: els, structure: explicitlyClassifiedStructure(els, PPM), options: OPTIONS });
     const feasible = res.plans.filter((p) => p.feasible);
     expect(feasible.length).toBeGreaterThan(0);
     const best = feasible.reduce((a, b) => (b.predictedScore > a.predictedScore ? b : a));
@@ -97,7 +98,7 @@ describe('评分上限逻辑 · 不因可优化性影响原始评分', () => {
   it('优化器在不可优化场景下返回不可行或分数不变', () => {
     const els = buildScenario(1.0, 1.0);
     const base = analyzePlan(els, OPTIONS);
-    const res = generateCandidatePlans({ elements: els, structure: buildStructureFromElements(els, true, PPM), options: OPTIONS });
+    const res = generateCandidatePlans({ elements: els, structure: explicitlyClassifiedStructure(els, PPM), options: OPTIONS });
     // 不可优化场景下，所有方案的 originalScore == base.overall
     for (const p of res.plans) {
       expect(p.originalScore).toBe(base.overall);
@@ -133,7 +134,7 @@ describe('结构方案真实性 · 方案 B/C 检查', () => {
     const els = entryBathroomElements();
     const res = generateCandidatePlans({
       elements: els,
-      structure: buildStructureFromElements(els, true, PPM),
+      structure: explicitlyClassifiedStructure(els, PPM),
       options: OPTIONS,
     });
     const rooms = els.filter((e) => ELEMENT_SPECS[e.type]?.category === 'room');
@@ -171,7 +172,7 @@ describe('结构方案真实性 · 方案 B/C 检查', () => {
     const els = entryBathroomElements();
     const res = generateCandidatePlans({
       elements: els,
-      structure: buildStructureFromElements(els, true, PPM),
+      structure: explicitlyClassifiedStructure(els, PPM),
       options: OPTIONS,
     });
     for (const plan of res.plans.filter((p) => p.feasible)) {
@@ -188,7 +189,7 @@ describe('结构方案真实性 · 方案 B/C 检查', () => {
     const els = entryBathroomElements();
     const res = generateCandidatePlans({
       elements: els,
-      structure: buildStructureFromElements(els, true, PPM),
+      structure: explicitlyClassifiedStructure(els, PPM),
       options: OPTIONS,
     });
     for (const plan of res.plans.filter((p) => p.feasible)) {
@@ -201,7 +202,7 @@ describe('结构方案真实性 · 方案 B/C 检查', () => {
   it('外墙和承重墙不被移动', () => {
     for (const id of ['entry-facing-bathroom', 'bathroom-in-center', 'bed-facing-door']) {
       const els = sampleElements(id);
-      const original = buildStructureFromElements(els, true, PPM);
+      const original = explicitlyClassifiedStructure(els, PPM);
       const res = generateCandidatePlans({ elements: els, structure: original, options: OPTIONS });
       for (const plan of res.plans) {
         const origExt = original.walls.filter((w) => w.kind === 'exterior');
@@ -215,7 +216,7 @@ describe('结构方案真实性 · 方案 B/C 检查', () => {
     const els = entryBathroomElements();
     const res = generateCandidatePlans({
       elements: els,
-      structure: buildStructureFromElements(els, true, PPM),
+      structure: explicitlyClassifiedStructure(els, PPM),
       options: OPTIONS,
     });
     const relocationPlans = res.plans.filter((p) =>
@@ -232,7 +233,7 @@ describe('结构方案真实性 · 方案 B/C 检查', () => {
     const els = entryBathroomElements();
     const res = generateCandidatePlans({
       elements: els,
-      structure: buildStructureFromElements(els, true, PPM),
+      structure: explicitlyClassifiedStructure(els, PPM),
       options: OPTIONS,
     });
     const partitionPlans = res.plans.filter((p) =>
@@ -261,7 +262,7 @@ describe('结构方案真实性 · 方案 B/C 检查', () => {
     const els = entryBathroomElements();
     const res = generateCandidatePlans({
       elements: els,
-      structure: buildStructureFromElements(els, true, PPM),
+      structure: explicitlyClassifiedStructure(els, PPM),
       options: OPTIONS,
     });
     for (const plan of res.plans.filter((p) => p.feasible)) {
@@ -280,7 +281,7 @@ describe('结构方案真实性 · 方案 B/C 检查', () => {
       const els = sampleElements(id);
       const res = generateCandidatePlans({
         elements: els,
-        structure: buildStructureFromElements(els, true, PPM),
+        structure: explicitlyClassifiedStructure(els, PPM),
         options: OPTIONS,
       });
       const originalRooms = els.filter((e) => ELEMENT_SPECS[e.type]?.category === 'room');

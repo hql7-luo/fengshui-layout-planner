@@ -2,11 +2,12 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { cleanup, fireEvent, render, screen, waitFor } from '@testing-library/react';
 import { analyzePlan } from '@/lib/rules/engine';
 import { createProjectFromSample } from '@/lib/samples';
-import { buildStructureFromElements, generateCandidatePlans } from '@/lib/optimizer';
+import { generateCandidatePlans } from '@/lib/optimizer';
 import { computeLayers, LAYER_IDS, type AllLayers, type LayerInput } from '@/lib/analysis-layers';
 import LayerPanel from '@/components/editor/LayerPanel';
 import { useProjectStore } from '@/store/project-store';
 import type { PlanElement, Project } from '@/lib/types';
+import { explicitlyClassifiedStructure } from './helpers/structure';
 
 const SAMPLE_ID = 'entry-facing-bathroom';
 
@@ -37,7 +38,7 @@ function buildInput(elements: PlanElement[], project: Project): LayerInput {
  */
 function optimizedAfter(project: Project): { before: PlanElement[]; after: PlanElement[]; solved: number } {
   const before = project.scenarios.before.elements;
-  const structure = buildStructureFromElements(before, true, project.pixelsPerMeter);
+  const structure = explicitlyClassifiedStructure(before, project.pixelsPerMeter);
   const result = generateCandidatePlans({ elements: before, structure, options: optionsOf(project) });
   const conflictCount = (elements: PlanElement[]) => {
     const input = buildInput(elements, project);

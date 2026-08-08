@@ -1,6 +1,6 @@
 {
   "name": "fengshui-layout-planner",
-  "version": "1.0.0",
+  "version": "1.0.1",
   "private": true,
   "scripts": {
     "dev": "next dev",
@@ -10,7 +10,9 @@
     "typecheck": "tsc --noEmit",
     "test": "vitest run",
     "test:watch": "vitest",
-    "test:e2e": "playwright test"
+    "test:e2e": "playwright test",
+    "test:e2e:prod": "PLAYWRIGHT_SERVER_MODE=production playwright test",
+    "screenshots:update": "UPDATE_SCREENSHOTS=1 playwright test tests/e2e/editor.spec.ts --grep \"候选、七图层\""
   },
   "dependencies": {
     "konva": "^9.3.22",

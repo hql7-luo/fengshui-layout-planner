@@ -1,5 +1,12 @@
 name: CI
 
+permissions:
+  contents: read
+
+concurrency:
+  group: ci-${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
 on:
   push:
     branches: [main, master]
@@ -34,5 +41,5 @@ jobs:
       - name: Build
         run: npm run build
 
-      - name: Browser end-to-end tests
-        run: npm run test:e2e
+      - name: Browser production end-to-end tests
+        run: npm run test:e2e:prod

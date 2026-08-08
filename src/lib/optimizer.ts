@@ -106,11 +106,10 @@ export function buildStructureFromElements(
   ppm = 75,
 ): StructureModel {
   const rooms = elements.filter((e) => ELEMENT_SPECS[e.type]?.category === 'room');
-  const derivedWalls = deriveWallsFromRooms(elements).filter((wall) => wall.kind !== 'exterior').map((wall) =>
-    loadBearingMarked && wall.kind === 'unknown'
-      ? { ...wall, kind: 'partition' as const, movable: true }
-      : wall,
-  );
+  // `loadBearingMarked` 只记录用户是否完成过结构分类，不是逐墙授权。
+  // 自动推导墙永远从 unknown / non-movable 开始，只有 setWallKind(wallId, 'partition')
+  // 才能将某一具体墙段交给自动优化器。
+  const derivedWalls = deriveWallsFromRooms(elements).filter((wall) => wall.kind !== 'exterior');
   const roomPoints = rooms.flatMap(corners);
   const bounds = roomPoints.length ? polygonBounds(roomPoints) : { x: 0, y: 0, width: 1080, height: 840 };
   // 保留完整外轮廓，覆盖开放过道没有房间矩形贴边的情况；外墙始终不可移动。
@@ -387,16 +386,24 @@ function validatePlan(
   windows: PlanElement[],
   ppm: number,
 ): string | null {
-  // 1. 外墙、承重墙与 unknown 墙不可移动；按稳定 id 比对，新增连接段不影响检查。
+  // 1. 外墙与承重墙必须保持不变；墙移动记录只能指向用户明确授权的 partition。
+  // unknown 墙不得成为移动目标，但相邻 partition 移动后会依据 room polygon 重建端部拓扑，
+  // 因此不再要求所有 unknown 原子墙段的 id / 长度完全不变。
   const sameWall = (a: Wall, b: Wall) =>
     a.kind === b.kind && a.x1 === b.x1 && a.y1 === b.y1 && a.x2 === b.x2 && a.y2 === b.y2;
-  for (const kind of ['exterior', 'load-bearing', 'unknown'] as const) {
+  for (const kind of ['exterior', 'load-bearing'] as const) {
     const orig = originalStructure.walls.filter((w) => w.kind === kind);
     for (const original of orig) {
       const projected = projectedStructure.walls.find((wall) => wall.id === original.id);
       if (!projected || !sameWall(original, projected)) {
-        return kind === 'exterior' ? '移动了外墙' : kind === 'load-bearing' ? '移动了承重墙' : '移动了未知属性墙体';
+        return kind === 'exterior' ? '移动了外墙' : '移动了承重墙';
       }
+    }
+  }
+  for (const movedWall of mods.flatMap((modification) => modification.movedWalls ?? [])) {
+    const authorized = originalStructure.walls.find((wall) => wall.id === movedWall.wallId);
+    if (!authorized || authorized.kind !== 'partition' || !authorized.movable) {
+      return `墙段「${movedWall.wallId}」未获得明确的非承重墙移动授权`;
     }
   }
   // 2. 新增墙体 / 屏风不得遮挡窗户
@@ -580,7 +587,7 @@ function buildPlan(
     finalRisks.push('非承重墙平移已通过本模型的几何与连通性约束，但不构成施工依据；开工前须复核墙内管线、防水、消防、楼板与物业许可。');
   }
 
-  if (ctx.conceptOnly) finalRisks.unshift('未标记承重墙，本方案为概念候选，不可直接施工；需建筑师、结构设计师或物业确认后方可实施');
+  if (ctx.conceptOnly) finalRisks.unshift('未完成墙体属性确认，本方案为概念候选，不可直接施工；需建筑师、结构设计师或物业确认后方可实施');
 
   return {
     id,

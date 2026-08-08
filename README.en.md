@@ -84,7 +84,9 @@ npm run typecheck
 npm run test
 npm run test:e2e # system Chrome, 1440×900 / 768×1024 / 390×844
 npm run build
+npm run test:e2e:prod # validates the built app with next start
 npm run start
+npm run screenshots:update # explicitly refreshes tracked product screenshots
 ```
 
 ## Built-in samples
