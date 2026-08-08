@@ -4,7 +4,7 @@
 >
 > Positioning: **a traditional-living-culture and modern spatial-layout reference tool**, not fortune telling and not construction-design software.
 
-[中文文档](./README.md)
+[Live Demo](https://fengshui-layout-planner.vercel.app) · [中文文档](./README.md)
 
 ![FengShui Layout Planner home page](./docs/screenshots/home-desktop.png)
 
