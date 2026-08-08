@@ -4,7 +4,7 @@
 >
 > 产品定位：**传统居住文化与现代空间布局参考工具**，不是算命网站，也不是施工设计软件。
 
-[English documentation](./README.en.md)
+[在线演示](https://fengshui-layout-planner.vercel.app) · [English documentation](./README.en.md)
 
 ![FengShui Layout Planner 首页](./docs/screenshots/home-desktop.png)
 
