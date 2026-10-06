@@ -16,6 +16,10 @@ on:
 jobs:
   build:
     runs-on: ubuntu-latest
+    timeout-minutes: 20
+    strategy:
+      matrix:
+        node: [22, 24]
     steps:
       - name: Checkout
         uses: actions/checkout@v4
@@ -23,7 +27,7 @@ jobs:
       - name: Setup Node.js
         uses: actions/setup-node@v4
         with:
-          node-version: 20
+          node-version: ${{ matrix.node }}
           cache: npm
 
       - name: Install dependencies
@@ -42,4 +46,5 @@ jobs:
         run: npm run build
 
       - name: Browser production end-to-end tests
+        if: matrix.node == 24
         run: npm run test:e2e:prod

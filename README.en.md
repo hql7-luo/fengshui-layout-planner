@@ -34,7 +34,7 @@ Core capabilities:
 
 ## Product screenshots
 
-These images are generated from the current v1.0.0 code in real Chrome through Playwright.
+These screenshots were generated during the v1.0.0 acceptance pass in real Chrome through Playwright and illustrate the editing and optimization workflow.
 
 | Visual editor | A/B/C optimization |
 | --- | --- |
@@ -74,7 +74,7 @@ Structural candidates are conceptual spatial proposals, not construction drawing
 
 ## Quick start
 
-Requires **Node.js ≥ 20.9** and **npm ≥ 10**.
+Requires **Node.js 22.13+ (22 LTS) or 24 LTS** and **npm ≥ 10**. `.nvmrc` selects Node.js 22; CI checks Node.js 22 and 24. The current project version is `v1.0.1`.
 
 ```bash
 npm ci
@@ -141,7 +141,7 @@ Next.js 16 (App Router) · React 19 · TypeScript · Tailwind CSS v4 · react-ko
 ## Current boundaries
 
 - The structure model is inferred from user-marked room boundaries and openings; it is not CAD/BIM, structural recognition, or an automatic load-bearing assessment.
-- v1.0.0 wall movement is limited to axis-aligned shared segments with marked rooms on both sides and an explicit `partition` classification. The search range is 0.15–0.8 m; both room polygons, areas, centroids, attached doors, and windows are synchronized.
+- Current v1.0.1 wall movement is limited to axis-aligned shared segments with marked rooms on both sides and an explicit `partition` classification. The search range is 0.15–0.8 m; both room polygons, areas, centroids, attached doors, and windows are synchronized.
 - `exterior` and `load-bearing` walls are immutable; `unknown` walls allow conceptual advice only. Diagonal/curved walls, compound junctions, and one-sided wall segments are not moved automatically.
 - Diagonal walls, curved walls, complex T-junctions, one-sided corridor walls, and CAD/BIM input are not supported yet.
 - Candidates validate minimum room area/width, self-intersection/overlap, opening attachment, wet-zone position, reachability, and newly introduced high-severity issues. These checks are reference-grade geometry, not fire, utilities, structural engineering, accessibility, or construction approval.
