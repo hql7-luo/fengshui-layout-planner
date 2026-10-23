@@ -1,6 +1,6 @@
 # AI 风水户型助手 · FengShui Layout Planner
 
-> FengShui Layout Planner is an explainable floor-plan analysis and optimization tool combining **traditional residential-layout rules** with **modern spatial-design principles**. Fixed rules, geometry constraints, and traceable scores are used throughout—never random “AI scores.”
+> FengShui Layout Planner is an explainable floor-plan analysis and optimization tool combining **traditional residential-layout rules** with **modern spatial-design principles**. Fixed rules, geometry constraints, and traceable scores are used throughout, never random “AI scores.”
 >
 > Positioning: **a traditional-living-culture and modern spatial-layout reference tool**, not fortune telling and not construction-design software.
 
@@ -18,7 +18,7 @@
 | English name | FengShui Layout Planner |
 | Type | Pure front-end floor-plan analysis tool |
 | Runtime | Next.js + browser; data persisted locally (localStorage) |
-| Core constraint | Scores are produced by a **fixed rule engine** — never by a random LLM score. |
+| Core constraint | Scores are produced by a **fixed rule engine**, never by a random LLM score. |
 
 Core capabilities:
 
@@ -56,10 +56,10 @@ These screenshots were generated during the v1.0.0 acceptance pass in real Chrom
 
 Users can classify each wall as:
 
-- `Exterior` — immutable.
-- `Load-bearing` — never moved automatically.
-- `Partition` — an explicitly confirmed non-load-bearing wall eligible for safe search.
-- `Unknown` — conceptual advice only; never moved automatically.
+- `Exterior`: immutable.
+- `Load-bearing`: never moved automatically.
+- `Partition`: an explicitly confirmed non-load-bearing wall eligible for safe search.
+- `Unknown`: conceptual advice only; never moved automatically.
 
 Only an explicitly marked `Partition` can be moved by the optimizer. Structural optimization can:
 
