@@ -130,6 +130,46 @@ describe('Project store · 场景与结构原子历史', () => {
 describe('Project store · localStorage schema v3', () => {
   beforeEach(resetStore);
 
+  it.each(['constructor', 'toString', '__proto__'])('discards inherited element type %s during recovery', (type) => {
+    const project = createProjectFromSample('entry-facing-bathroom', 123)!;
+    const originalElements = project.scenarios.before.elements;
+    const malformed = { ...originalElements[0], id: 'invalid-element', type };
+    const restored = normalizePersistedState({
+      projects: {
+        [project.id]: {
+          ...project,
+          scenarios: { before: { elements: [...originalElements, malformed] } },
+        },
+      },
+      currentId: project.id,
+    });
+
+    expect(restored.projects[project.id].scenarios.before.elements).toEqual(originalElements);
+  });
+
+  it('does not restore inherited object properties as project IDs', () => {
+    const restored = normalizePersistedState({
+      projects: {},
+      order: ['constructor', '__proto__', 'toString'],
+      currentId: 'constructor',
+    });
+
+    expect(restored.currentId).toBeNull();
+    expect(restored.order).toEqual([]);
+  });
+
+  it('preserves an own project named __proto__ without changing the project map prototype', () => {
+    const project = { ...createProjectFromSample('entry-facing-bathroom', 123)!, id: '__proto__' };
+    const restored = normalizePersistedState({
+      projects: { ['__proto__']: project },
+      currentId: '__proto__',
+    });
+
+    expect(Object.hasOwn(restored.projects, '__proto__')).toBe(true);
+    expect(restored.order).toEqual(['__proto__']);
+    expect(restored.projects.__proto__.id).toBe('__proto__');
+  });
+
   it('持久化当前场景、候选、图层开关与透明度', () => {
     useProjectStore.getState().createSampleProject('entry-facing-bathroom');
     useProjectStore.getState().toggleLayer('heatmap');

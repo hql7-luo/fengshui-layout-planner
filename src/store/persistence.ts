@@ -52,7 +52,7 @@ function clamp(value: number, min: number, max: number): number {
 function sanitizeElement(value: unknown): PlanElement | null {
   const item = record(value);
   if (!item || typeof item.id !== 'string' || typeof item.type !== 'string') return null;
-  if (!(item.type in ELEMENT_SPECS)) return null;
+  if (!Object.hasOwn(ELEMENT_SPECS, item.type)) return null;
   const width = finite(item.width, 0);
   const height = finite(item.height, 0);
   if (width <= 0 || height <= 0) return null;
@@ -342,14 +342,15 @@ function sanitizeCandidates(
 export function normalizePersistedState(value: unknown, preserveCandidates = true): PersistedProjectState {
   const source = record(value) ?? {};
   const rawProjects = record(source.projects) ?? {};
-  const projects: Record<string, Project> = {};
+  // Persisted IDs are data, including names such as "__proto__".
+  const projects: Record<string, Project> = Object.create(null);
   for (const [id, value] of Object.entries(rawProjects)) {
     const project = sanitizeProject(value, id);
     if (project) projects[project.id] = project;
   }
   const requestedOrder = Array.isArray(source.order) ? source.order.filter((id): id is string => typeof id === 'string') : [];
-  const order = [...new Set([...requestedOrder.filter((id) => projects[id]), ...Object.keys(projects)])];
-  const currentId = typeof source.currentId === 'string' && projects[source.currentId]
+  const order = [...new Set([...requestedOrder.filter((id) => Object.hasOwn(projects, id)), ...Object.keys(projects)])];
+  const currentId = typeof source.currentId === 'string' && Object.hasOwn(projects, source.currentId)
     ? source.currentId
     : (order[0] ?? null);
   const scenario: ScenarioKey = source.scenario === 'after' ? 'after' : 'before';

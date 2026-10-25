@@ -16,7 +16,7 @@
   },
   "dependencies": {
     "konva": "^9.3.22",
-    "next": "16.3.8",
+    "next": "16.4.1",
     "react": "19.2.7",
     "react-dom": "19.2.7",
     "react-konva": "^19.2.5",
@@ -24,9 +24,10 @@
   },
   "overrides": {
     "js-yaml": "4.3.2",
+    "vite": "7.3.7",
     "next": {
       "postcss": "8.5.26",
-      "sharp": "0.35.4"
+      "sharp": "0.35.5"
     }
   },
   "devDependencies": {
@@ -39,12 +40,12 @@
     "@types/react-dom": "^19",
     "@vitejs/plugin-react": "^5.2.0",
     "eslint": "^9",
-    "eslint-config-next": "16.3.8",
+    "eslint-config-next": "16.4.1",
     "jsdom": "^26.1.0",
     "tailwindcss": "^4",
     "tsx": "^4.23.1",
     "typescript": "^5",
-    "vitest": "^4.1.11"
+    "vitest": "^4.1.12"
   },
   "engines": {
     "node": "^22.13.0 || ^24.0.0",
